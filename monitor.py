@@ -54,22 +54,36 @@ def find_roblox_packages():
     return [CONFIG_PACKAGE or "com.roblox.client"]
 
 def get_activity_name(package):
-    """Detect main activity name for a package using pm dump."""
-    cmd = f"su -c \"pm dump {package} 2>/dev/null | grep -m1 android.intent.action.MAIN | grep cmp= | sed 's/.*cmp=//' | cut -d '{{' -f2 | cut -d '/' -f1\""
+    """Detect main activity name for a package, with fallbacks."""
+    # Try to get from pm dump
+    cmd = f"su -c \"pm dump {package} 2>/dev/null | grep -E 'android.intent.action.MAIN|android.intent.category.LAUNCHER' -A1 | grep 'cmp=' | head -1\""
     result = os.popen(cmd).read().strip()
-    if result:
-        return result
-    # Fallback to common Roblox activity names
-    for activity in [
-        "com.roblox.client.ActivityNativeMain",
-        "com.roblox.client.RobloxActivity",
+    
+    # Parse: cmp=com.pkg/com.pkg.Activity
+    if "cmp=" in result:
+        try:
+            cmp_value = result.split("cmp=")[1].split()[0]
+            if "/" in cmp_value:
+                return cmp_value.split("/")[1]
+        except:
+            pass
+    
+    # Fallback: try common activity names in order
+    common_activities = [
         f"{package}.ActivityNativeMain",
         f"{package}.RobloxActivity",
         f"{package}.MainActivity",
-    ]:
-        # Try simple test, if activity starts with package name, likely valid
+        "com.roblox.client.ActivityNativeMain",
+        "com.roblox.client.RobloxActivity",
+        "com.roblox.client.MainActivity",
+    ]
+    
+    for activity in common_activities:
+        # Test if activity might exist by checking if package name matches
         if activity.startswith(package):
             return activity
+    
+    # Default fallback
     return f"{package}.ActivityNativeMain"
 
 def get_roblox_username(package):
@@ -210,8 +224,24 @@ def kill_roblox(package):
 def join_server(package, activity_name):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
     print(f"[+] Launching: {link}")
-    # Specify package + activity explicitly to avoid prompt when multiple Roblox apps exist
-    os.system(f'su -c "am start -n {package}/{activity_name} -a android.intent.action.VIEW -d \'{link}\'"')
+    
+    # Try 1: explicit package + activity
+    cmd1 = f'su -c "am start -n {package}/{activity_name} -a android.intent.action.VIEW -d \'{link}\' 2>/dev/null"'
+    result1 = os.popen(cmd1).read()
+    if "Error" not in result1:
+        print(f"[✓] Launched via {package}/{activity_name}")
+    else:
+        # Try 2: only package (let Android resolve launcher activity)
+        print(f"[*] Failed with {activity_name}, trying package-only launch...")
+        cmd2 = f'su -c "am start -p {package} -a android.intent.action.VIEW -d \'{link}\' 2>/dev/null"'
+        result2 = os.popen(cmd2).read()
+        if "Error" not in result2:
+            print(f"[✓] Launched via package {package}")
+        else:
+            # Try 3: generic implicit intent (no package specified)
+            print(f"[!] Warning: only implicit launch available")
+            os.system(f'su -c "am start -a android.intent.action.VIEW -d \'{link}\'"')
+    
     print("[*] Menunggu game loading untuk auto-tap...")
     time.sleep(20)
     print("[+] Melakukan Auto-Tap agar tidak idle...")
