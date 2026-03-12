@@ -111,7 +111,7 @@ def kill_roblox(package):
     os.system('su -c "logcat -c"')
 
 def join_server(package):
-    link = f"roblox://navigation/share_links?code={CODE}&type=Server"
+    link = f"https://www.roblox.com/share?code={CODE}&type=Server"
     print(f"[+] Launching: {link}")
     os.system(f'su -c "am start -a android.intent.action.VIEW -d \'{link}\'"')
     print("[*] Menunggu game loading untuk auto-tap...")
