@@ -59,15 +59,17 @@ check_root() {
 }
 
 pick_language() {
+    print_header
     echo "Pilih Bahasa / Choose Language"
     echo "1. Indonesia"
     echo "2. English"
-    printf "> "
+    printf "Choice : "
     read -r lang_pick
     case "$lang_pick" in
         2) LANG_CHOICE="en" ;;
         *) LANG_CHOICE="id" ;;
     esac
+    clear
 }
 
 run_setup() {
@@ -158,7 +160,7 @@ main_menu() {
             echo "4. Misc (auto exec after reboot, dll)"
             echo "0. Keluar"
         fi
-        printf "> "
+        printf "Choice : "
         read -r choice
         case "$choice" in
             1) run_setup ;;
@@ -169,7 +171,11 @@ main_menu() {
             *) echo "Invalid choice" ;;
         esac
         echo
-        echo "Press Enter..."
+        if [ "$LANG_CHOICE" = "en" ]; then
+            echo "Press Enter..."
+        else
+            echo "Tekan Enter..."
+        fi
         read -r _
     done
 }

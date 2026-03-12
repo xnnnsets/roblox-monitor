@@ -27,6 +27,26 @@ def tr(lang: str, id_text: str, en_text: str) -> str:
     return id_text if lang == "id" else en_text
 
 
+def clear_screen() -> None:
+    os.system("clear")
+
+
+def print_section(lang: str, id_title: str, en_title: str) -> None:
+    print("\n" + "=" * 54)
+    print(tr(lang, id_title, en_title))
+    print("=" * 54)
+
+
+def prompt_menu_choice(lang: str, options: List[str], default: str = "1") -> str:
+    while True:
+        raw = input(f"{tr(lang, 'Choice', 'Choice')} : ").strip()
+        if not raw and default:
+            raw = default
+        if raw in options:
+            return raw
+        print(tr(lang, "Pilihan tidak valid.", "Invalid choice."))
+
+
 def normalize_packages(items: List[str]) -> List[str]:
     seen = set()
     normalized = []
@@ -165,12 +185,12 @@ def choose_packages_interactive(lang: str, available: List[str], current_selecte
         print(tr(lang, "Tidak ada package Roblox terdeteksi.", "No Roblox packages detected."))
         return []
 
-    print(tr(lang, "Pilih package (pisahkan dengan koma, contoh: 1,3)", "Choose packages (comma-separated, example: 1,3)"))
+    print(tr(lang, "Pilih package (pisahkan koma, contoh: 1,3)", "Choose packages (comma-separated, example: 1,3)"))
     for idx, pkg in enumerate(available, start=1):
         marker = "*" if pkg in current_selected else " "
         print(f" {idx}. [{marker}] {pkg}")
 
-    raw = input(tr(lang, "Nomor package", "Package numbers") + ": ").strip()
+    raw = input(f"{tr(lang, 'Choice', 'Choice')} : ").strip()
     if not raw:
         return current_selected
 
@@ -188,9 +208,59 @@ def choose_packages_interactive(lang: str, available: List[str], current_selecte
     return normalize_packages(selected)
 
 
+def collect_manual_packages(lang: str, existing: List[str]) -> List[str]:
+    packages = normalize_packages(existing)
+    print(tr(
+        lang,
+        "Input package satu per baris. Tekan Enter kosong jika selesai.",
+        "Input one package per line. Press empty Enter when done.",
+    ))
+    if packages:
+        print(tr(lang, f"Saat ini: {', '.join(packages)}", f"Current: {', '.join(packages)}"))
+
+    while True:
+        raw = input(tr(lang, "Package", "Package") + " : ").strip()
+        if not raw:
+            break
+        additions = normalize_packages(raw.split(","))
+        packages = normalize_packages(packages + additions)
+        print(tr(lang, f"Ditambahkan: {', '.join(additions)}", f"Added: {', '.join(additions)}"))
+    return packages
+
+
+def configure_monitor_selection(config: dict, lang: str, available: List[str]) -> None:
+    available = normalize_packages(available)
+    if not available:
+        config["monitor_selection"] = "all"
+        config["selected_packages"] = []
+        print(tr(lang, "Tidak ada package tersedia.", "No packages available."))
+        return
+
+    print("\n" + tr(lang, "Pilih target monitor Roblox:", "Choose Roblox monitor targets:"))
+    print("1. " + tr(lang, "Buka semua package", "Open all packages"))
+    print("2. " + tr(lang, "Pilih package tertentu", "Choose selected packages"))
+    mode = prompt_menu_choice(
+        lang,
+        options=["1", "2"],
+        default="1" if config.get("monitor_selection", "all") == "all" else "2",
+    )
+
+    if mode == "2":
+        config["monitor_selection"] = "selected"
+        config["selected_packages"] = choose_packages_interactive(
+            lang,
+            available,
+            config.get("selected_packages", []),
+        )
+    else:
+        config["monitor_selection"] = "all"
+        config["selected_packages"] = []
+
+
 def package_management_menu(config: dict, lang: str) -> None:
     while True:
-        print("\n" + "=" * 46)
+        clear_screen()
+        print("=" * 46)
         print(tr(lang, "Kelola Package", "Package Management"))
         print("=" * 46)
         print(tr(lang, f"Mode sekarang: {config['package_mode']}", f"Current mode: {config['package_mode']}"))
@@ -202,7 +272,7 @@ def package_management_menu(config: dict, lang: str) -> None:
         print("5. " + tr(lang, "Import dari auto scanner", "Import from auto scanner"))
         print("0. " + tr(lang, "Kembali", "Back"))
 
-        choice = input("> ").strip()
+        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "0"], default="0")
         if choice == "1":
             config["package_mode"] = "auto"
             print(tr(lang, "Mode package: AUTO", "Package mode: AUTO"))
@@ -210,17 +280,16 @@ def package_management_menu(config: dict, lang: str) -> None:
             config["package_mode"] = "manual"
             print(tr(lang, "Mode package: MANUAL", "Package mode: MANUAL"))
         elif choice == "3":
-            pkg = prompt(lang, "Masukkan package name", "Enter package name")
-            if pkg:
-                config["manual_packages"] = normalize_packages(config["manual_packages"] + [pkg])
+            config["manual_packages"] = collect_manual_packages(lang, config.get("manual_packages", []))
         elif choice == "4":
             manual = config.get("manual_packages", [])
             if not manual:
                 print(tr(lang, "List manual kosong.", "Manual list is empty."))
+                input(tr(lang, "Tekan Enter...", "Press Enter..."))
                 continue
             for idx, pkg in enumerate(manual, start=1):
                 print(f" {idx}. {pkg}")
-            raw = input(tr(lang, "Nomor yang dihapus", "Number to remove") + ": ").strip()
+            raw = input(f"{tr(lang, 'Choice', 'Choice')} : ").strip()
             try:
                 idx = int(raw)
                 if 1 <= idx <= len(manual):
@@ -256,11 +325,12 @@ def package_management_menu(config: dict, lang: str) -> None:
         elif choice == "0":
             break
 
+        input(tr(lang, "Tekan Enter...", "Press Enter..."))
+
 
 def quick_setup(config: dict, lang: str) -> dict:
-    print("\n" + "=" * 52)
-    print(tr(lang, "SETUP CONFIGURATION (WAJIB FIRST RUN)", "SETUP CONFIGURATION (FIRST RUN REQUIRED)"))
-    print("=" * 52)
+    clear_screen()
+    print_section(lang, "SETUP CONFIGURATION (WAJIB FIRST RUN)", "SETUP CONFIGURATION (FIRST RUN REQUIRED)")
 
     code_input = prompt(
         lang,
@@ -270,41 +340,40 @@ def quick_setup(config: dict, lang: str) -> dict:
     )
     config["server_code"] = parse_server_code(code_input)
 
-    mode_choice = prompt(
+    print_section(lang, "Sumber Package Roblox", "Roblox Package Source")
+    print("1. " + tr(lang, "Auto scanner package app roblox", "Auto scanner package app roblox"))
+    print("2. " + tr(lang, "Manual input app roblox package", "Manual input app roblox package"))
+    mode_choice = prompt_menu_choice(
         lang,
-        "Mode package: 1) Auto Scanner  2) Manual Input",
-        "Package mode: 1) Auto Scanner  2) Manual Input",
-        "1" if config.get("package_mode", "auto") == "auto" else "2",
+        options=["1", "2"],
+        default="1" if config.get("package_mode", "auto") == "auto" else "2",
     )
+
     if mode_choice == "2":
         config["package_mode"] = "manual"
-        raw_manual = prompt(
-            lang,
-            "Masukkan package manual (pisahkan koma)",
-            "Enter manual packages (comma-separated)",
-            ",".join(config.get("manual_packages", [])),
-        )
-        config["manual_packages"] = normalize_packages(raw_manual.split(","))
+        config["manual_packages"] = collect_manual_packages(lang, config.get("manual_packages", []))
+        available = normalize_packages(config.get("manual_packages", []))
     else:
         config["package_mode"] = "auto"
+        scanned = scan_packages()
+        if not scanned:
+            print(tr(
+                lang,
+                "Auto scanner tidak menemukan package. Beralih ke manual input.",
+                "Auto scanner found no packages. Switching to manual input.",
+            ))
+            config["package_mode"] = "manual"
+            config["manual_packages"] = collect_manual_packages(lang, config.get("manual_packages", []))
+            available = normalize_packages(config.get("manual_packages", []))
+        else:
+            available = scanned
+            print("\n" + tr(lang, "Hasil auto scanner:", "Auto scanner result:"))
+            for idx, pkg in enumerate(available, start=1):
+                print(f" {idx}. {pkg}")
 
-    available = resolve_source_packages(config)
-    if available:
-        print(tr(lang, f"Paket tersedia: {', '.join(available)}", f"Available packages: {', '.join(available)}"))
+    configure_monitor_selection(config, lang, available)
 
-    select_choice = prompt(
-        lang,
-        "Buka package: 1) Semua  2) Pilih package tertentu",
-        "Open package: 1) All  2) Selected packages",
-        "1" if config.get("monitor_selection", "all") == "all" else "2",
-    )
-    if select_choice == "2" and available:
-        config["monitor_selection"] = "selected"
-        config["selected_packages"] = choose_packages_interactive(lang, available, config.get("selected_packages", []))
-    else:
-        config["monitor_selection"] = "all"
-        config["selected_packages"] = []
-
+    print_section(lang, "Konfigurasi Lainnya", "Other Configuration")
     config["discord_webhook"] = prompt(
         lang,
         "Discord webhook (opsional, kosongkan jika tidak pakai)",
@@ -337,7 +406,8 @@ def quick_setup(config: dict, lang: str) -> dict:
 
 def edit_config(config: dict, lang: str) -> dict:
     while True:
-        print("\n" + "=" * 50)
+        clear_screen()
+        print("=" * 50)
         print(tr(lang, "EDIT CONFIG", "EDIT CONFIG"))
         print("=" * 50)
         print("1. " + tr(lang, "Server code/link", "Server code/link"))
@@ -351,7 +421,7 @@ def edit_config(config: dict, lang: str) -> dict:
         print("9. " + tr(lang, "Simpan dan keluar", "Save and exit"))
         print("0. " + tr(lang, "Batal", "Cancel"))
 
-        choice = input("> ").strip()
+        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"], default="0")
         if choice == "1":
             raw = prompt(lang, "Server code/link", "Server code/link", config.get("server_code", ""))
             config["server_code"] = parse_server_code(raw)
@@ -359,25 +429,7 @@ def edit_config(config: dict, lang: str) -> dict:
             package_management_menu(config, lang)
         elif choice == "3":
             available = resolve_source_packages(config)
-            if not available:
-                print(tr(lang, "Tidak ada package tersedia.", "No package available."))
-                continue
-            mode = prompt(
-                lang,
-                "Mode monitor: 1) Semua  2) Pilih",
-                "Monitor mode: 1) All  2) Selected",
-                "1" if config.get("monitor_selection", "all") == "all" else "2",
-            )
-            if mode == "2":
-                config["monitor_selection"] = "selected"
-                config["selected_packages"] = choose_packages_interactive(
-                    lang,
-                    available,
-                    config.get("selected_packages", []),
-                )
-            else:
-                config["monitor_selection"] = "all"
-                config["selected_packages"] = []
+            configure_monitor_selection(config, lang, available)
         elif choice == "4":
             config["discord_webhook"] = prompt(
                 lang,
@@ -421,6 +473,8 @@ def edit_config(config: dict, lang: str) -> dict:
         elif choice == "0":
             print(tr(lang, "Edit dibatalkan.", "Edit cancelled."))
             return config
+
+        input(tr(lang, "Tekan Enter...", "Press Enter..."))
 
 
 def do_get_target_packages() -> None:
