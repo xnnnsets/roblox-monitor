@@ -238,89 +238,27 @@ def kill_roblox(package):
     os.system(f'su -c "am force-stop {package}"')
     os.system('su -c "logcat -c"')
 
-def wait_for_game_loaded(package, timeout=90):
-    """Tunggu sampai Roblox sudah masuk game, deteksi via logcat."""
-    print("[*] Menunggu game loading...")
-    in_game_patterns = [
-        r"DataModel initialized",
-        r"workspace\.Players",
-        r"Game loaded",
-        r"Rendering started",
-        r"PlaceId",
-        r"Joining game",
-        r"Connection accepted",
-    ]
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        logs = os.popen(
-            f'su -c "logcat -d -t 200 2>/dev/null | grep -Ei \'Roblox  :|{package}\' | tail -20"'
-        ).read()
-        for pattern in in_game_patterns:
-            if re.search(pattern, logs, re.IGNORECASE):
-                print(f"[✓] Game loaded (detected: {pattern})")
-                return True
-        elapsed = int(timeout - (deadline - time.time()))
-        remaining = timeout - elapsed
-        print(f"    [{elapsed}s] Menunggu game... ({remaining}s tersisa)")
-        time.sleep(8)
-    print("[!] Timeout menunggu game, lanjut auto-tap anyway")
-    return False
-
 def join_server(package, activity_name):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
-    print(f"[+] Deep Link: {link}")
+    print(f"[+] Joining: {link}")
     print(f"[+] Package: {package}")
     
-    launched = False
-    
-    # Step 1: Resolve activity yang benar-benar handle roblox:// scheme (bukan splash)
-    resolved = get_deeplink_activity(package)
-    if resolved:
-        print(f"[*] Resolved deeplink activity: {resolved}")
-    
-    # Build activity list: prioritaskan yg handle roblox://, bukan splash
-    activities_to_try = []
-    if resolved and 'splash' not in resolved.lower():
-        activities_to_try.append(resolved)
-    for act in [
-        f"{package}.ActivityNativeMain",
-        "com.roblox.client.ActivityNativeMain",
-        f"{package}.RobloxActivity",
-        f"{package}.MainActivity",
-    ]:
-        if act not in activities_to_try:
-            activities_to_try.append(act)
-    
-    for activity in activities_to_try:
-        try:
-            print(f"[*] Trying: {activity}")
-            result = subprocess.run(
-                ["su", "-c", f"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"],
-                capture_output=True, text=True, timeout=5
-            )
-            out = result.stdout + result.stderr
-            print(f"    {out[:80].strip()}")
-            if result.returncode == 0 and 'error' not in out.lower():
-                print(f"[✓] Launched via {activity}")
-                launched = True
-                break
-        except Exception as e:
-            print(f"[✗] {e}")
-    
-    if not launched:
-        # Last resort: implicit intent (memang trigger chooser jika ada > 1 app, tapi tetap dicoba)
-        print("[!] Explicit failed, fallback implicit...")
+    # Gunakan --package agar Android route deep link ke app yg tepat
+    # tanpa perlu guess activity name dan tanpa trigger chooser dialog
+    result = subprocess.run(
+        ["su", "-c", f"am start --package '{package}' -a android.intent.action.VIEW -d '{link}'"],
+        capture_output=True, text=True, timeout=5
+    )
+    out = (result.stdout + result.stderr).strip()
+    print(f"    {out[:120]}")
+    if result.returncode == 0 and 'error' not in out.lower():
+        print(f"[✓] Launched {package}")
+    else:
+        print(f"[!] --package failed, fallback to implicit intent...")
         subprocess.run(
             ["su", "-c", f"am start -a android.intent.action.VIEW -d '{link}'"],
             capture_output=True, text=True, timeout=5
         )
-    
-    # Tunggu game benar-benar loaded
-    wait_for_game_loaded(package, timeout=90)
-    print("[+] Melakukan Auto-Tap agar tidak idle...")
-    subprocess.run(["su", "-c", "input tap 500 1000"], capture_output=True)
-    time.sleep(2)
-    subprocess.run(["su", "-c", "input tap 500 1000"], capture_output=True)
 
 def display_dashboard(packages_info, memory_info, check_count):
     """Render a bordered table: PACKAGE (username) | STATUS, plus a memory row."""
