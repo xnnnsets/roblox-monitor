@@ -53,8 +53,25 @@ def find_roblox_packages():
     # Fallback to config or default
     return [CONFIG_PACKAGE or "com.roblox.client"]
 
+def get_deeplink_activity(package):
+    """Resolve activity that handles roblox:// deep links for this specific package."""
+    test_uri = "roblox://navigation"
+    # pm resolve-activity shows which activity handles this intent
+    cmd = f"su -c \"pm resolve-activity -a android.intent.action.VIEW -d '{test_uri}' 2>/dev/null\""
+    output = os.popen(cmd).read()
+    # Try to find our package/activity in output
+    # Output format: name=com.roblox.client/com.roblox.client.ActivityNativeMain
+    for pattern in [
+        rf"name={re.escape(package)}/([A-Za-z0-9_.]+)",
+        rf"{re.escape(package)}/([A-Za-z0-9_.]+)",
+    ]:
+        m = re.search(pattern, output)
+        if m:
+            return m.group(1)
+    return None
+
 def get_activity_name(package):
-    """Detect main activity name for a package, with fallbacks."""
+    """Detect main launcher activity name for a package, with fallbacks."""
     # Try to get from pm dump
     cmd = f"su -c \"pm dump {package} 2>/dev/null | grep -E 'android.intent.action.MAIN|android.intent.category.LAUNCHER' -A1 | grep 'cmp=' | head -1\""
     result = os.popen(cmd).read().strip()
@@ -221,6 +238,34 @@ def kill_roblox(package):
     os.system(f'su -c "am force-stop {package}"')
     os.system('su -c "logcat -c"')
 
+def wait_for_game_loaded(package, timeout=90):
+    """Tunggu sampai Roblox sudah masuk game, deteksi via logcat."""
+    print("[*] Menunggu game loading...")
+    in_game_patterns = [
+        r"DataModel initialized",
+        r"workspace\.Players",
+        r"Game loaded",
+        r"Rendering started",
+        r"PlaceId",
+        r"Joining game",
+        r"Connection accepted",
+    ]
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        logs = os.popen(
+            f'su -c "logcat -d -t 200 2>/dev/null | grep -Ei \'Roblox  :|{package}\' | tail -20"'
+        ).read()
+        for pattern in in_game_patterns:
+            if re.search(pattern, logs, re.IGNORECASE):
+                print(f"[✓] Game loaded (detected: {pattern})")
+                return True
+        elapsed = int(timeout - (deadline - time.time()))
+        remaining = timeout - elapsed
+        print(f"    [{elapsed}s] Menunggu game... ({remaining}s tersisa)")
+        time.sleep(8)
+    print("[!] Timeout menunggu game, lanjut auto-tap anyway")
+    return False
+
 def join_server(package, activity_name):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
     print(f"[+] Deep Link: {link}")
@@ -228,57 +273,50 @@ def join_server(package, activity_name):
     
     launched = False
     
-    # Strategy 1: Try explicit activities with proper subprocess array (NO shell escaping issues)
-    activities_to_try = [activity_name]
+    # Step 1: Resolve activity yang benar-benar handle roblox:// scheme (bukan splash)
+    resolved = get_deeplink_activity(package)
+    if resolved:
+        print(f"[*] Resolved deeplink activity: {resolved}")
+    
+    # Build activity list: prioritaskan yg handle roblox://, bukan splash
+    activities_to_try = []
+    if resolved and 'splash' not in resolved.lower():
+        activities_to_try.append(resolved)
     for act in [
         f"{package}.ActivityNativeMain",
+        "com.roblox.client.ActivityNativeMain",
         f"{package}.RobloxActivity",
         f"{package}.MainActivity",
-        "com.roblox.client.ActivityNativeMain",
     ]:
         if act not in activities_to_try:
             activities_to_try.append(act)
     
     for activity in activities_to_try:
         try:
-            print(f"[*] Trying explicit: {activity}")
-            # Use subprocess.run with array (PROPER way, NO shell escaping issues)
+            print(f"[*] Trying: {activity}")
             result = subprocess.run(
                 ["su", "-c", f"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                capture_output=True, text=True, timeout=5
             )
-            print(f"    OUTPUT: {result.stdout[:80] if result.stdout else 'OK'}")
-            
-            if result.returncode == 0 or "Error" not in result.stdout.lower():
-                print(f"[✓] SUCCESS via {activity}")
+            out = result.stdout + result.stderr
+            print(f"    {out[:80].strip()}")
+            if result.returncode == 0 and 'error' not in out.lower():
+                print(f"[✓] Launched via {activity}")
                 launched = True
                 break
-            else:
-                print(f"[✗] {result.stdout[:50]}")
         except Exception as e:
-            print(f"[✗] Exception: {e}")
+            print(f"[✗] {e}")
     
-    # Strategy 2: If explicit failed, try implicit intent (let Android route the scheme)
     if not launched:
-        print("[!] Explicit failed, trying implicit intent (Android will route)...")
-        try:
-            result = subprocess.run(
-                ["su", "-c", f"am start -a android.intent.action.VIEW -d '{link}'"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            print(f"    OUTPUT: {result.stdout[:80] if result.stdout else 'OK'}")
-            if result.returncode == 0:
-                print(f"[✓] Implicit intent success")
-                launched = True
-        except Exception as e:
-            print(f"[✗] Exception: {e}")
+        # Last resort: implicit intent (memang trigger chooser jika ada > 1 app, tapi tetap dicoba)
+        print("[!] Explicit failed, fallback implicit...")
+        subprocess.run(
+            ["su", "-c", f"am start -a android.intent.action.VIEW -d '{link}'"],
+            capture_output=True, text=True, timeout=5
+        )
     
-    print("[*] Menunggu game loading untuk auto-tap...")
-    time.sleep(20)
+    # Tunggu game benar-benar loaded
+    wait_for_game_loaded(package, timeout=90)
     print("[+] Melakukan Auto-Tap agar tidak idle...")
     subprocess.run(["su", "-c", "input tap 500 1000"], capture_output=True)
     time.sleep(2)
