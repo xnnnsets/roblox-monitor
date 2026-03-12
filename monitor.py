@@ -223,34 +223,43 @@ def kill_roblox(package):
 
 def join_server(package, activity_name):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
-    print(f"[+] Launching: {link}")
+    print(f"[+] Launching: {link} via {package}")
     
-    # List activities to try, with detected one first
-    activities_to_try = [activity_name]
-    for act in [
-        f"{package}.ActivityNativeMain",
-        f"{package}.RobloxActivity",
-        f"{package}.MainActivity",
-        "com.roblox.client.ActivityNativeMain",
-    ]:
-        if act not in activities_to_try:
-            activities_to_try.append(act)
-    
-    # Try each activity
     launched = False
-    for activity in activities_to_try:
-        cmd = f'su -c "am start -n {package}/{activity} -a android.intent.action.VIEW -d \'{link}\'"'
-        result = os.popen(cmd).read()
-        if "Error" not in result.lower():
-            print(f"[✓] Launched via {activity}")
-            launched = True
-            break
-        else:
-            print(f"[✗] {activity} failed")
+    
+    # Strategy 1: Implicit intent (Android routes deep link automatically) - PALING RELIABLE
+    print("[*] Mencoba implicit intent (Android routing)...")
+    result = os.popen(f'su -c "am start -a android.intent.action.VIEW -d {link}"').read()
+    if "Error" not in result.lower() and "error" not in result.lower():
+        print(f"[✓] Implicit intent berhasil")
+        launched = True
+    else:
+        print(f"[✗] Implicit intent gagal, mencoba explicit package...")
+        
+        # Strategy 2: Try explicit activity names
+        activities_to_try = [activity_name]
+        for act in [
+            f"{package}.ActivityNativeMain",
+            f"{package}.RobloxActivity",
+            f"{package}.MainActivity",
+            "com.roblox.client.ActivityNativeMain",
+        ]:
+            if act not in activities_to_try:
+                activities_to_try.append(act)
+        
+        for activity in activities_to_try:
+            cmd = f'su -c "am start -n {package}/{activity} -a android.intent.action.VIEW -d {link}"'
+            result = os.popen(cmd).read()
+            if "Error" not in result.lower() and "error" not in result.lower():
+                print(f"[✓] Explicit activity berhasil: {activity}")
+                launched = True
+                break
+            else:
+                print(f"[✗] {activity} failed")
     
     if not launched:
-        print("[!] No valid activity found, trying implicit launch...")
-        os.system(f'su -c "am start -a android.intent.action.VIEW -d \'{link}\'"')
+        print("[!] Semua strategy gagal, trying last resort...")
+        os.system(f'su -c "am start -a android.intent.action.VIEW --user 0 -d {link}"')
     
     print("[*] Menunggu game loading untuk auto-tap...")
     time.sleep(20)
