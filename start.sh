@@ -149,7 +149,7 @@ run_edit() {
 
 clear_cache_and_kill_targets() {
     cd "$REPO_DIR" || return 1
-    targets="$(python config_wizard.py --mode get-target-packages --lang "$LANG_CHOICE")"
+    targets="$(python config_wizard.py --mode get-cache-packages --lang "$LANG_CHOICE")"
     if [ -z "$targets" ]; then
         say "[!] Tidak ada package target yang terkonfigurasi/terdeteksi." "[!] No target package configured/detected."
         return 0
@@ -219,13 +219,13 @@ main_menu() {
         if [ "$LANG_CHOICE" = "en" ]; then
             echo "1. Setup configuration (First Run Needed)"
             echo "2. Edit config"
-            echo "3. Run scripts"
+            echo "3. Optimize + Launch Apps"
             echo "4. Misc (auto exec after reboot, etc)"
             echo "0. Exit"
         else
             echo "1. Setup configuration (Wajib First Run)"
             echo "2. Ubah konfigurasi"
-            echo "3. Jalankan monitor"
+            echo "3. Optimalkan + Buka Aplikasi"
             echo "4. Lainnya (auto exec setelah reboot, dll)"
             echo "0. Keluar"
         fi

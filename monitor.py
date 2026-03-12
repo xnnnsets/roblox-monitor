@@ -19,6 +19,8 @@ except FileNotFoundError:
 INTERVAL = config.get("check_interval", 10)
 WEBHOOK = config.get("discord_webhook", "")
 CODE = config.get("server_code", "")
+SERVER_MODE = str(config.get("server_mode", "all")).lower()
+SERVER_CODE_BY_PACKAGE = config.get("server_code_by_package", {})
 CONFIG_PACKAGE = config.get("package", "")
 PACKAGE_MODE = str(config.get("package_mode", "auto")).lower()
 MANUAL_PACKAGES = config.get("manual_packages", [])
@@ -29,6 +31,7 @@ LOG_SCAN_LINES = int(config.get("log_scan_lines", 4000))
 AUTO_FLOAT_GRID = bool(config.get("auto_float_grid", True))
 FLOAT_START_DELAY = int(config.get("float_start_delay_seconds", 3))
 MULTI_LAUNCH_DELAY = int(config.get("multi_launch_delay_seconds", 30))
+FLOAT_ORIENTATION_MODE = str(config.get("float_orientation_mode", "system")).lower()
 
 # ANSI color codes
 GREEN = "\033[92m"
@@ -40,6 +43,13 @@ def send_discord(msg):
     if WEBHOOK:
         try: requests.post(WEBHOOK, json={"content": msg}, timeout=5)
         except: pass
+
+def get_server_code_for_package(package):
+    if SERVER_MODE == "per_package" and isinstance(SERVER_CODE_BY_PACKAGE, dict):
+        code = str(SERVER_CODE_BY_PACKAGE.get(package, "")).strip()
+        if code:
+            return code
+    return CODE
 
 def check_root_permission():
     try:
@@ -311,7 +321,12 @@ def get_grid_bounds(index, total, width, height):
     gap = 10
     top_offset = 58
     bottom_margin = 12
-    is_landscape = width > height
+    if FLOAT_ORIENTATION_MODE == "landscape":
+        is_landscape = True
+    elif FLOAT_ORIENTATION_MODE == "portrait":
+        is_landscape = False
+    else:
+        is_landscape = width > height
 
     # Dock semua jendela ke sisi kanan layar
     dock_ratio = 0.56 if is_landscape else 0.50
@@ -323,9 +338,9 @@ def get_grid_bounds(index, total, width, height):
 
     # Landscape lebih padat kolom agar muat banyak app
     if is_landscape:
-        cols = 4 if total >= 8 else (3 if total >= 4 else 2)
+        cols = 4 if total >= 10 else (3 if total >= 4 else 2)
     else:
-        cols = 2 if total > 1 else 1
+        cols = 3 if total >= 7 else (2 if total > 1 else 1)
 
     cols = max(1, min(cols, total))
     rows = max(1, math.ceil(total / cols))
@@ -334,10 +349,10 @@ def get_grid_bounds(index, total, width, height):
     cell_h = (available_h - (gap * (rows - 1))) // rows
 
     # Paksa ukuran kecil agar muat lebih banyak Roblox
-    max_w = 280 if is_landscape else 240
-    max_h = 220 if is_landscape else 300
-    min_w = 120
-    min_h = 140 if is_landscape else 170
+    max_w = 280 if is_landscape else 210
+    max_h = 220 if is_landscape else 250
+    min_w = 120 if is_landscape else 110
+    min_h = 140 if is_landscape else 145
     cell_w = max(min_w, min(cell_w, max_w))
     cell_h = max(min_h, min(cell_h, max_h))
 
@@ -346,8 +361,9 @@ def get_grid_bounds(index, total, width, height):
 
     used_w = cols * cell_w + (cols - 1) * gap
     start_x = width - gap - used_w
-    if start_x < dock_left + gap:
-        start_x = dock_left + gap
+    min_left = 0 if is_landscape else dock_left + gap
+    if start_x < min_left:
+        start_x = min_left
 
     left = start_x + col * (cell_w + gap)
     top = top_offset + gap + row * (cell_h + gap)
@@ -372,6 +388,13 @@ def apply_float_grid(package, grid_index, grid_total):
     width, height = get_screen_size()
     left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
 
+    if FLOAT_ORIENTATION_MODE == "landscape":
+        run_su(f"settings put system user_rotation 1")
+        run_su(f"settings put system accelerometer_rotation 0")
+    elif FLOAT_ORIENTATION_MODE == "portrait":
+        run_su(f"settings put system user_rotation 0")
+        run_su(f"settings put system accelerometer_rotation 0")
+
     float_commands = [
         f"cmd activity task set-windowing-mode {task_id} 5",
         f"am stack move-task {task_id} 2 true",
@@ -392,7 +415,8 @@ def apply_float_grid(package, grid_index, grid_total):
         print(f"[!] Float grid tidak didukung penuh di ROM ini ({package})")
 
 def join_server(package, activity_name, grid_index=0, grid_total=1):
-    link = f"roblox://navigation/share_links?code={CODE}&type=Server"
+    package_code = get_server_code_for_package(package)
+    link = f"roblox://navigation/share_links?code={package_code}&type=Server"
     print(f"[+] Joining: {link}")
     print(f"[+] Package: {package}")
     

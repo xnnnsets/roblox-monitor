@@ -16,11 +16,15 @@ DEFAULT_CONFIG = {
     "selected_packages": [],
     "check_interval": 10,
     "server_code": "",
+    "server_mode": "all",
+    "server_code_by_package": {},
     "discord_webhook": "",
     "afk_timeout_minutes": 20,
+    "clear_cache_mode": "target",
     "auto_float_grid": True,
     "float_start_delay_seconds": 3,
     "multi_launch_delay_seconds": 30,
+    "float_orientation_mode": "system",
 }
 
 
@@ -98,12 +102,16 @@ def load_config() -> dict:
     config.update(data)
     config["manual_packages"] = normalize_packages(config.get("manual_packages", []))
     config["selected_packages"] = normalize_packages(config.get("selected_packages", []))
+    if not isinstance(config.get("server_code_by_package"), dict):
+        config["server_code_by_package"] = {}
     return config
 
 
 def save_config(config: dict) -> None:
     config["manual_packages"] = normalize_packages(config.get("manual_packages", []))
     config["selected_packages"] = normalize_packages(config.get("selected_packages", []))
+    if not isinstance(config.get("server_code_by_package"), dict):
+        config["server_code_by_package"] = {}
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
         f.write("\n")
@@ -179,6 +187,85 @@ def resolve_target_packages(config: dict) -> List[str]:
         target = ordered + extras
         return normalize_packages(target)
     return source
+
+
+def resolve_cache_packages(config: dict) -> List[str]:
+    cache_mode = str(config.get("clear_cache_mode", "target")).lower()
+    if cache_mode == "all":
+        return resolve_source_packages(config)
+    return resolve_target_packages(config)
+
+
+def configure_server_settings(config: dict, lang: str, available: List[str]) -> None:
+    available = normalize_packages(available)
+    print_section(lang, "Konfigurasi Private Server", "Private Server Configuration")
+    print("1. " + tr(lang, "Satu private server untuk semua package", "One private server for all packages"))
+    print("2. " + tr(lang, "Private server berbeda per package", "Different private server per package"))
+    default_mode = "1" if str(config.get("server_mode", "all")) == "all" else "2"
+    mode = prompt_menu_choice(lang, ["1", "2"], default=default_mode)
+
+    if mode == "1":
+        config["server_mode"] = "all"
+        raw = prompt(
+            lang,
+            "Masukkan private server link / game link / server code",
+            "Enter private server link / game link / server code",
+            config.get("server_code", ""),
+        )
+        config["server_code"] = parse_server_code(raw)
+        return
+
+    config["server_mode"] = "per_package"
+    per_map = config.get("server_code_by_package", {})
+    if not available:
+        print(tr(lang, "Tidak ada package, gunakan server code global.", "No packages available, using global server code."))
+    else:
+        print(tr(lang, "Isi server code per package (kosong = pakai global)", "Set per-package server code (blank = use global)"))
+        for pkg in available:
+            value = prompt(
+                lang,
+                f"{pkg} server link/code",
+                f"{pkg} server link/code",
+                per_map.get(pkg, ""),
+            )
+            per_map[pkg] = parse_server_code(value) if value else ""
+    config["server_code_by_package"] = per_map
+    fallback = prompt(
+        lang,
+        "Server code global fallback",
+        "Global fallback server code",
+        config.get("server_code", ""),
+    )
+    config["server_code"] = parse_server_code(fallback)
+
+
+def configure_cache_mode(config: dict, lang: str) -> None:
+    print_section(lang, "Mode Clear Cache", "Clear Cache Mode")
+    print("1. " + tr(lang, "Clear cache semua package Roblox", "Clear cache all Roblox packages"))
+    print("2. " + tr(lang, "Clear cache package target monitor", "Clear cache monitor target packages"))
+    default_mode = "1" if str(config.get("clear_cache_mode", "target")) == "all" else "2"
+    choice = prompt_menu_choice(lang, ["1", "2"], default=default_mode)
+    config["clear_cache_mode"] = "all" if choice == "1" else "target"
+
+
+def configure_float_orientation(config: dict, lang: str) -> None:
+    print_section(lang, "Orientasi Float/Grid", "Float/Grid Orientation")
+    print("1. " + tr(lang, "Ikuti orientasi sistem", "Follow system orientation"))
+    print("2. " + tr(lang, "Paksa landscape semua app", "Force landscape all apps"))
+    print("3. " + tr(lang, "Paksa portrait semua app", "Force portrait all apps"))
+    mode = str(config.get("float_orientation_mode", "system")).lower()
+    default_mode = "1"
+    if mode == "landscape":
+        default_mode = "2"
+    elif mode == "portrait":
+        default_mode = "3"
+    choice = prompt_menu_choice(lang, ["1", "2", "3"], default=default_mode)
+    if choice == "2":
+        config["float_orientation_mode"] = "landscape"
+    elif choice == "3":
+        config["float_orientation_mode"] = "portrait"
+    else:
+        config["float_orientation_mode"] = "system"
 
 
 def choose_packages_interactive(lang: str, available: List[str], current_selected: List[str]) -> List[str]:
@@ -333,14 +420,6 @@ def quick_setup(config: dict, lang: str) -> dict:
     clear_screen()
     print_section(lang, "SETUP CONFIGURATION (WAJIB FIRST RUN)", "SETUP CONFIGURATION (FIRST RUN REQUIRED)")
 
-    code_input = prompt(
-        lang,
-        "Masukkan private server link / game link / server code",
-        "Enter private server link / game link / server code",
-        config.get("server_code", ""),
-    )
-    config["server_code"] = parse_server_code(code_input)
-
     print_section(lang, "Sumber Package Roblox", "Roblox Package Source")
     print("1. " + tr(lang, "Auto scanner package app Roblox", "Auto scanner Roblox app package"))
     print("2. " + tr(lang, "Manual input app Roblox package", "Manual input Roblox app package"))
@@ -373,6 +452,8 @@ def quick_setup(config: dict, lang: str) -> dict:
                 print(f" {idx}. {pkg}")
 
     configure_monitor_selection(config, lang, available)
+    configure_server_settings(config, lang, available)
+    configure_cache_mode(config, lang)
 
     print_section(lang, "Konfigurasi Lainnya", "Other Configuration")
     config["discord_webhook"] = prompt(
@@ -408,6 +489,7 @@ def quick_setup(config: dict, lang: str) -> dict:
         int(config.get("multi_launch_delay_seconds", 30)),
         0,
     )
+    configure_float_orientation(config, lang)
 
     return config
 
@@ -418,56 +500,60 @@ def edit_config(config: dict, lang: str) -> dict:
         print("=" * 50)
         print(tr(lang, "EDIT CONFIG", "EDIT CONFIG"))
         print("=" * 50)
-        print("1. " + tr(lang, "Server code/link", "Server code/link"))
+        print("1. " + tr(lang, "Private server (all/per package)", "Private server (all/per package)"))
         print("2. " + tr(lang, "Kelola package (auto/manual, tambah/hapus)", "Manage packages (auto/manual, add/remove)"))
         print("3. " + tr(lang, "Pilih package monitor (all/selected)", "Choose monitor targets (all/selected)"))
-        print("4. " + tr(lang, "Discord webhook", "Discord webhook"))
-        print("5. " + tr(lang, "Check interval", "Check interval"))
-        print("6. " + tr(lang, "AFK timeout", "AFK timeout"))
-        print("7. " + tr(lang, "Auto float grid", "Auto float grid"))
-        print("8. " + tr(lang, "Float start delay", "Float start delay"))
-        print("9. " + tr(lang, "Jeda buka antar app", "Delay between app launches"))
-        print("10. " + tr(lang, "Simpan dan keluar", "Save and exit"))
+        print("4. " + tr(lang, "Mode clear cache (all/target)", "Clear cache mode (all/target)"))
+        print("5. " + tr(lang, "Discord webhook", "Discord webhook"))
+        print("6. " + tr(lang, "Check interval", "Check interval"))
+        print("7. " + tr(lang, "AFK timeout", "AFK timeout"))
+        print("8. " + tr(lang, "Auto float grid", "Auto float grid"))
+        print("9. " + tr(lang, "Float start delay", "Float start delay"))
+        print("10. " + tr(lang, "Jeda buka antar app", "Delay between app launches"))
+        print("11. " + tr(lang, "Orientasi float/grid", "Float/grid orientation"))
+        print("12. " + tr(lang, "Simpan dan keluar", "Save and exit"))
         print("0. " + tr(lang, "Batal", "Cancel"))
 
-        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "0"], default="0")
+        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "0"], default="0")
         if choice == "1":
-            raw = prompt(lang, "Server code/link", "Server code/link", config.get("server_code", ""))
-            config["server_code"] = parse_server_code(raw)
+            available = resolve_source_packages(config)
+            configure_server_settings(config, lang, available)
         elif choice == "2":
             package_management_menu(config, lang)
         elif choice == "3":
             available = resolve_source_packages(config)
             configure_monitor_selection(config, lang, available)
         elif choice == "4":
+            configure_cache_mode(config, lang)
+        elif choice == "5":
             config["discord_webhook"] = prompt(
                 lang,
                 "Discord webhook",
                 "Discord webhook",
                 config.get("discord_webhook", ""),
             )
-        elif choice == "5":
+        elif choice == "6":
             config["check_interval"] = prompt_int(
                 lang,
                 "Check interval (detik)",
                 "Check interval (seconds)",
                 int(config.get("check_interval", 10)),
             )
-        elif choice == "6":
+        elif choice == "7":
             config["afk_timeout_minutes"] = prompt_float(
                 lang,
                 "AFK timeout (menit)",
                 "AFK timeout (minutes)",
                 float(config.get("afk_timeout_minutes", 20)),
             )
-        elif choice == "7":
+        elif choice == "8":
             config["auto_float_grid"] = prompt_bool(
                 lang,
                 "Auto float grid? (y/n)",
                 "Auto float grid? (y/n)",
                 bool(config.get("auto_float_grid", True)),
             )
-        elif choice == "8":
+        elif choice == "9":
             config["float_start_delay_seconds"] = prompt_int(
                 lang,
                 "Float start delay (detik)",
@@ -475,7 +561,7 @@ def edit_config(config: dict, lang: str) -> dict:
                 int(config.get("float_start_delay_seconds", 3)),
                 0,
             )
-        elif choice == "9":
+        elif choice == "10":
             config["multi_launch_delay_seconds"] = prompt_int(
                 lang,
                 "Jeda buka antar app (detik)",
@@ -483,7 +569,9 @@ def edit_config(config: dict, lang: str) -> dict:
                 int(config.get("multi_launch_delay_seconds", 30)),
                 0,
             )
-        elif choice == "10":
+        elif choice == "11":
+            configure_float_orientation(config, lang)
+        elif choice == "12":
             save_config(config)
             print(tr(lang, "Config tersimpan.", "Config saved."))
             return config
@@ -500,14 +588,23 @@ def do_get_target_packages() -> None:
         print(pkg)
 
 
+def do_get_cache_packages() -> None:
+    config = load_config()
+    for pkg in resolve_cache_packages(config):
+        print(pkg)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["setup", "edit", "get-target-packages"], required=True)
+    parser.add_argument("--mode", choices=["setup", "edit", "get-target-packages", "get-cache-packages"], required=True)
     parser.add_argument("--lang", choices=["id", "en"], default="id")
     args = parser.parse_args()
 
     if args.mode == "get-target-packages":
         do_get_target_packages()
+        return
+    if args.mode == "get-cache-packages":
+        do_get_cache_packages()
         return
 
     config = load_config()

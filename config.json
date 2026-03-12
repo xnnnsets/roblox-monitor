@@ -7,9 +7,13 @@
   "selected_packages": [],
   "check_interval": 10,
   "server_code": "540f6bae817236499dcf96ed6374f773",
+  "server_mode": "all",
+  "server_code_by_package": {},
   "discord_webhook": "",
   "afk_timeout_minutes": 20,
+  "clear_cache_mode": "target",
   "auto_float_grid": true,
   "float_start_delay_seconds": 3,
-  "multi_launch_delay_seconds": 30
+  "multi_launch_delay_seconds": 30,
+  "float_orientation_mode": "system"
 }
