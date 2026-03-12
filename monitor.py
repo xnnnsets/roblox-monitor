@@ -191,7 +191,8 @@ def kill_roblox(package):
 def join_server(package):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
     print(f"[+] Launching: {link}")
-    os.system(f'su -c "am start -a android.intent.action.VIEW -d \'{link}\'"')
+    # Specify package explicitly to avoid "choose app" prompt when multiple Roblox apps exist
+    os.system(f'su -c "am start -n {package}/.ActivityNativeMain -a android.intent.action.VIEW -d \'{link}\'"')
     print("[*] Menunggu game loading untuk auto-tap...")
     time.sleep(20)
     print("[+] Melakukan Auto-Tap agar tidak idle...")
