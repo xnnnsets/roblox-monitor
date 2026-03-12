@@ -10,5 +10,6 @@
   "discord_webhook": "",
   "afk_timeout_minutes": 20,
   "auto_float_grid": true,
-  "float_start_delay_seconds": 3
+  "float_start_delay_seconds": 3,
+  "multi_launch_delay_seconds": 30
 }

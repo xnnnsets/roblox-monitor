@@ -20,6 +20,7 @@ DEFAULT_CONFIG = {
     "afk_timeout_minutes": 20,
     "auto_float_grid": True,
     "float_start_delay_seconds": 3,
+    "multi_launch_delay_seconds": 30,
 }
 
 
@@ -39,7 +40,7 @@ def print_section(lang: str, id_title: str, en_title: str) -> None:
 
 def prompt_menu_choice(lang: str, options: List[str], default: str = "1") -> str:
     while True:
-        raw = input(f"{tr(lang, 'Choice', 'Choice')} : ").strip()
+        raw = input(f"{tr(lang, 'Pilihan', 'Choice')} : ").strip()
         if not raw and default:
             raw = default
         if raw in options:
@@ -190,7 +191,7 @@ def choose_packages_interactive(lang: str, available: List[str], current_selecte
         marker = "*" if pkg in current_selected else " "
         print(f" {idx}. [{marker}] {pkg}")
 
-    raw = input(f"{tr(lang, 'Choice', 'Choice')} : ").strip()
+    raw = input(f"{tr(lang, 'Pilihan', 'Choice')} : ").strip()
     if not raw:
         return current_selected
 
@@ -219,7 +220,7 @@ def collect_manual_packages(lang: str, existing: List[str]) -> List[str]:
         print(tr(lang, f"Saat ini: {', '.join(packages)}", f"Current: {', '.join(packages)}"))
 
     while True:
-        raw = input(tr(lang, "Package", "Package") + " : ").strip()
+        raw = input(tr(lang, "Paket", "Package") + " : ").strip()
         if not raw:
             break
         additions = normalize_packages(raw.split(","))
@@ -265,11 +266,11 @@ def package_management_menu(config: dict, lang: str) -> None:
         print("=" * 46)
         print(tr(lang, f"Mode sekarang: {config['package_mode']}", f"Current mode: {config['package_mode']}"))
         print(tr(lang, f"Manual list: {', '.join(config['manual_packages']) or '-'}", f"Manual list: {', '.join(config['manual_packages']) or '-'}"))
-        print("1. " + tr(lang, "Ubah ke AUTO scanner", "Set AUTO scanner mode"))
-        print("2. " + tr(lang, "Ubah ke MANUAL input", "Set MANUAL mode"))
-        print("3. " + tr(lang, "Tambah package manual", "Add manual package"))
-        print("4. " + tr(lang, "Hapus package manual", "Remove manual package"))
-        print("5. " + tr(lang, "Import dari auto scanner", "Import from auto scanner"))
+        print("1. " + tr(lang, "Ubah ke mode AUTO scanner", "Set AUTO scanner mode"))
+        print("2. " + tr(lang, "Ubah ke mode MANUAL input", "Set MANUAL mode"))
+        print("3. " + tr(lang, "Tambah paket manual", "Add manual package"))
+        print("4. " + tr(lang, "Hapus paket manual", "Remove manual package"))
+        print("5. " + tr(lang, "Import dari hasil scanner", "Import from scanner result"))
         print("0. " + tr(lang, "Kembali", "Back"))
 
         choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "0"], default="0")
@@ -289,7 +290,7 @@ def package_management_menu(config: dict, lang: str) -> None:
                 continue
             for idx, pkg in enumerate(manual, start=1):
                 print(f" {idx}. {pkg}")
-            raw = input(f"{tr(lang, 'Choice', 'Choice')} : ").strip()
+            raw = input(f"{tr(lang, 'Pilihan', 'Choice')} : ").strip()
             try:
                 idx = int(raw)
                 if 1 <= idx <= len(manual):
@@ -341,8 +342,8 @@ def quick_setup(config: dict, lang: str) -> dict:
     config["server_code"] = parse_server_code(code_input)
 
     print_section(lang, "Sumber Package Roblox", "Roblox Package Source")
-    print("1. " + tr(lang, "Auto scanner package app roblox", "Auto scanner package app roblox"))
-    print("2. " + tr(lang, "Manual input app roblox package", "Manual input app roblox package"))
+    print("1. " + tr(lang, "Auto scanner package app Roblox", "Auto scanner Roblox app package"))
+    print("2. " + tr(lang, "Manual input app Roblox package", "Manual input Roblox app package"))
     mode_choice = prompt_menu_choice(
         lang,
         options=["1", "2"],
@@ -400,6 +401,13 @@ def quick_setup(config: dict, lang: str) -> dict:
         int(config.get("float_start_delay_seconds", 3)),
         0,
     )
+    config["multi_launch_delay_seconds"] = prompt_int(
+        lang,
+        "Jeda buka antar app (detik)",
+        "Delay between app launches (seconds)",
+        int(config.get("multi_launch_delay_seconds", 30)),
+        0,
+    )
 
     return config
 
@@ -418,10 +426,11 @@ def edit_config(config: dict, lang: str) -> dict:
         print("6. " + tr(lang, "AFK timeout", "AFK timeout"))
         print("7. " + tr(lang, "Auto float grid", "Auto float grid"))
         print("8. " + tr(lang, "Float start delay", "Float start delay"))
-        print("9. " + tr(lang, "Simpan dan keluar", "Save and exit"))
+        print("9. " + tr(lang, "Jeda buka antar app", "Delay between app launches"))
+        print("10. " + tr(lang, "Simpan dan keluar", "Save and exit"))
         print("0. " + tr(lang, "Batal", "Cancel"))
 
-        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"], default="0")
+        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "0"], default="0")
         if choice == "1":
             raw = prompt(lang, "Server code/link", "Server code/link", config.get("server_code", ""))
             config["server_code"] = parse_server_code(raw)
@@ -467,6 +476,14 @@ def edit_config(config: dict, lang: str) -> dict:
                 0,
             )
         elif choice == "9":
+            config["multi_launch_delay_seconds"] = prompt_int(
+                lang,
+                "Jeda buka antar app (detik)",
+                "Delay between app launches (seconds)",
+                int(config.get("multi_launch_delay_seconds", 30)),
+                0,
+            )
+        elif choice == "10":
             save_config(config)
             print(tr(lang, "Config tersimpan.", "Config saved."))
             return config

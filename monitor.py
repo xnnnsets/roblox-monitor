@@ -28,6 +28,7 @@ AFK_TIMEOUT_MIN = float(config.get("afk_timeout_minutes", 20))
 LOG_SCAN_LINES = int(config.get("log_scan_lines", 4000))
 AUTO_FLOAT_GRID = bool(config.get("auto_float_grid", True))
 FLOAT_START_DELAY = int(config.get("float_start_delay_seconds", 3))
+MULTI_LAUNCH_DELAY = int(config.get("multi_launch_delay_seconds", 30))
 
 # ANSI color codes
 GREEN = "\033[92m"
@@ -561,10 +562,10 @@ def monitor():
             join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total)
             pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
             usernames[pkg] = get_roblox_username(pkg)
-            # Jeda 30 detik antar app jika ada lebih dari 1 yang harus dibuka
+            # Jeda antar app jika ada lebih dari 1 yang harus dibuka
             if i < len(crashed_pkgs) - 1:
-                print(f"[*] Menunggu 30 detik sebelum membuka app berikutnya...")
-                time.sleep(30)
+                print(f"[*] Menunggu {MULTI_LAUNCH_DELAY} detik sebelum membuka app berikutnya...")
+                time.sleep(MULTI_LAUNCH_DELAY)
 
         # Check AFK timeout (game freezed, no activity)
         for pkg, username, running in packages_info:

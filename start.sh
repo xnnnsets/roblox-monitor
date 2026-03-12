@@ -40,8 +40,33 @@ load_saved_language() {
 print_header() {
     clear
     echo "=========================================="
-    echo "      ROBLOX MONITOR CONTROL CENTER"
+    if [ "$LANG_CHOICE" = "en" ]; then
+        echo "      ROBLOX MONITOR CONTROL CENTER"
+    else
+        echo "      PUSAT KONTROL ROBLOX MONITOR"
+    fi
     echo "=========================================="
+}
+
+backup_config() {
+    rm -f "$CONFIG_BACKUP"
+    if [ -f "$REPO_DIR/config.json" ]; then
+        cp "$REPO_DIR/config.json" "$CONFIG_BACKUP" 2>/dev/null
+        return 0
+    fi
+    if [ -f "$SCRIPT_DIR/config.json" ]; then
+        cp "$SCRIPT_DIR/config.json" "$CONFIG_BACKUP" 2>/dev/null
+        return 0
+    fi
+    return 1
+}
+
+restore_config() {
+    if [ -f "$CONFIG_BACKUP" ]; then
+        cp "$CONFIG_BACKUP" "$REPO_DIR/config.json" 2>/dev/null
+        rm -f "$CONFIG_BACKUP"
+        say "[v] Config lama berhasil dipulihkan." "[v] Previous config restored successfully."
+    fi
 }
 
 ensure_repo() {
@@ -50,9 +75,7 @@ ensure_repo() {
         pkg install git -y || return 1
     fi
 
-    if [ -f "$REPO_DIR/config.json" ]; then
-        cp "$REPO_DIR/config.json" "$CONFIG_BACKUP" 2>/dev/null
-    fi
+    backup_config >/dev/null 2>&1 && say "[*] Backup config ditemukan." "[*] Existing config backup found."
 
     if [ -d "$REPO_DIR/.git" ] && [ "$REPO_DIR" = "$SCRIPT_DIR" ]; then
         say "[*] Repo aktif terdeteksi, refresh dengan git..." "[*] Active repo detected, refreshing with git..."
@@ -70,10 +93,7 @@ ensure_repo() {
         git clone "$REPO_URL" "$REPO_DIR" || return 1
     fi
 
-    if [ -f "$CONFIG_BACKUP" ]; then
-        cp "$CONFIG_BACKUP" "$REPO_DIR/config.json" 2>/dev/null
-        rm -f "$CONFIG_BACKUP"
-    fi
+    restore_config
 
     return 0
 }
@@ -173,7 +193,7 @@ misc_menu() {
     while true; do
         print_header
         echo "------------------------------------------"
-        echo "$(t "Misc" "Misc")"
+        echo "$(t "Lainnya" "Misc")"
         echo "1. $(t "Setup auto jalan setelah reboot" "Setup auto exec after reboot")"
         echo "2. $(t "Nonaktifkan auto jalan setelah reboot" "Disable auto exec after reboot")"
         echo "3. $(t "Update repo (git pull)" "Update repo (git pull)")"
@@ -204,9 +224,9 @@ main_menu() {
             echo "0. Exit"
         else
             echo "1. Setup configuration (Wajib First Run)"
-            echo "2. Edit config"
-            echo "3. Run scripts"
-            echo "4. Misc (auto exec after reboot, dll)"
+            echo "2. Ubah konfigurasi"
+            echo "3. Jalankan monitor"
+            echo "4. Lainnya (auto exec setelah reboot, dll)"
             echo "0. Keluar"
         fi
         printf "Choice : "
