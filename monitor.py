@@ -225,22 +225,32 @@ def join_server(package, activity_name):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
     print(f"[+] Launching: {link}")
     
-    # Try 1: explicit package + activity
-    cmd1 = f'su -c "am start -n {package}/{activity_name} -a android.intent.action.VIEW -d \'{link}\' 2>/dev/null"'
-    result1 = os.popen(cmd1).read()
-    if "Error" not in result1:
-        print(f"[✓] Launched via {package}/{activity_name}")
-    else:
-        # Try 2: only package (let Android resolve launcher activity)
-        print(f"[*] Failed with {activity_name}, trying package-only launch...")
-        cmd2 = f'su -c "am start -p {package} -a android.intent.action.VIEW -d \'{link}\' 2>/dev/null"'
-        result2 = os.popen(cmd2).read()
-        if "Error" not in result2:
-            print(f"[✓] Launched via package {package}")
+    # List activities to try, with detected one first
+    activities_to_try = [activity_name]
+    for act in [
+        f"{package}.ActivityNativeMain",
+        f"{package}.RobloxActivity",
+        f"{package}.MainActivity",
+        "com.roblox.client.ActivityNativeMain",
+    ]:
+        if act not in activities_to_try:
+            activities_to_try.append(act)
+    
+    # Try each activity
+    launched = False
+    for activity in activities_to_try:
+        cmd = f'su -c "am start -n {package}/{activity} -a android.intent.action.VIEW -d \'{link}\'"'
+        result = os.popen(cmd).read()
+        if "Error" not in result.lower():
+            print(f"[✓] Launched via {activity}")
+            launched = True
+            break
         else:
-            # Try 3: generic implicit intent (no package specified)
-            print(f"[!] Warning: only implicit launch available")
-            os.system(f'su -c "am start -a android.intent.action.VIEW -d \'{link}\'"')
+            print(f"[✗] {activity} failed")
+    
+    if not launched:
+        print("[!] No valid activity found, trying implicit launch...")
+        os.system(f'su -c "am start -a android.intent.action.VIEW -d \'{link}\'"')
     
     print("[*] Menunggu game loading untuk auto-tap...")
     time.sleep(20)
