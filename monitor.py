@@ -20,6 +20,10 @@ INTERVAL = config.get("check_interval", 10)
 WEBHOOK = config.get("discord_webhook", "")
 CODE = config.get("server_code", "")
 CONFIG_PACKAGE = config.get("package", "")
+PACKAGE_MODE = str(config.get("package_mode", "auto")).lower()
+MANUAL_PACKAGES = config.get("manual_packages", [])
+MONITOR_SELECTION = str(config.get("monitor_selection", "")).lower()
+SELECTED_PACKAGES = config.get("selected_packages", [])
 AFK_TIMEOUT_MIN = float(config.get("afk_timeout_minutes", 20))
 LOG_SCAN_LINES = int(config.get("log_scan_lines", 4000))
 AUTO_FLOAT_GRID = bool(config.get("auto_float_grid", True))
@@ -55,6 +59,39 @@ def find_roblox_packages():
         return packages
     # Fallback to config or default
     return [CONFIG_PACKAGE or "com.roblox.client"]
+
+def normalize_package_list(items):
+    unique = []
+    seen = set()
+    for item in items:
+        pkg = str(item).strip()
+        if not pkg or pkg in seen:
+            continue
+        seen.add(pkg)
+        unique.append(pkg)
+    return unique
+
+def resolve_target_packages(installed_packages):
+    """Resolve package targets from config: auto/manual + all/selected."""
+    installed = normalize_package_list(installed_packages)
+    manual = normalize_package_list(MANUAL_PACKAGES if isinstance(MANUAL_PACKAGES, list) else [])
+    selected = normalize_package_list(SELECTED_PACKAGES if isinstance(SELECTED_PACKAGES, list) else [])
+
+    if CONFIG_PACKAGE:
+        manual = normalize_package_list(manual + [CONFIG_PACKAGE])
+
+    if PACKAGE_MODE == "manual":
+        source = manual if manual else installed
+    else:
+        source = installed if installed else manual
+
+    if MONITOR_SELECTION == "selected" and selected:
+        ordered = [pkg for pkg in source if pkg in selected]
+        extras = [pkg for pkg in selected if pkg not in ordered]
+        target = normalize_package_list(ordered + extras)
+        return target if target else source
+
+    return source
 
 def get_deeplink_activity(package):
     """Cari activity yang punya intent-filter untuk roblox:// scheme via pm dump."""
@@ -446,46 +483,51 @@ def monitor():
         sys.exit(1)
 
     print("[v] Mendeteksi paket Roblox yang terinstall...")
-    packages = find_roblox_packages()
-    print(f"[v] Ditemukan {len(packages)} paket: {', '.join(packages)}")
+    installed_packages = find_roblox_packages()
+    target_packages = resolve_target_packages(installed_packages)
+    if not target_packages:
+        target_packages = installed_packages
+    if not target_packages:
+        target_packages = ["com.roblox.client"]
+
+    print(f"[v] Installed: {len(installed_packages)} paket: {', '.join(installed_packages)}")
+    print(f"[v] Target monitor: {len(target_packages)} paket: {', '.join(target_packages)}")
 
     # Get activity names for each package
     print("[v] Mendeteksi activity names...")
     activity_map = {}
-    for pkg in packages:
+    for pkg in target_packages:
         activity_map[pkg] = get_activity_name(pkg)
         print(f"    {pkg} -> {activity_map[pkg]}")
 
     print("[v] Membaca username Roblox...")
     usernames = {}
-    for pkg in packages:
+    for pkg in target_packages:
         usernames[pkg] = get_roblox_username(pkg)
         print(f"    {pkg} -> {usernames[pkg]}")
 
-    # Ask user: monitor all or select one
-    target_packages = packages
-    if len(packages) > 1:
+    # Fallback interactive menu only if config has no explicit selection mode
+    if len(target_packages) > 1 and MONITOR_SELECTION not in ("all", "selected"):
         print("\n" + "="*50)
         print("Pilihan Monitor:")
         print("1. Monitor SEMUA Roblox apps")
-        for i, pkg in enumerate(packages, start=2):
+        for i, pkg in enumerate(target_packages, start=2):
             print(f"{i}. Monitor hanya {pkg} ({usernames[pkg]})")
         print("="*50)
         choice = input("Pilih nomor (default 1): ").strip() or "1"
         try:
             choice_idx = int(choice) - 1
             if choice_idx == 0:
-                target_packages = packages
-                print(f"✓ Monitor SEMUA ({len(packages)} apps)")
-            elif 0 < choice_idx < len(packages) + 1:
-                target_packages = [packages[choice_idx - 1]]
+                print(f"✓ Monitor SEMUA ({len(target_packages)} apps)")
+            elif 0 < choice_idx < len(target_packages) + 1:
+                target_packages = [target_packages[choice_idx - 1]]
                 print(f"✓ Monitor hanya: {target_packages[0]} ({usernames[target_packages[0]]})")
             else:
                 print("❌ Pilihan invalid, default ke monitor semua.")
-                target_packages = packages
+                pass
         except ValueError:
             print("❌ Input invalid, default ke monitor semua.")
-            target_packages = packages
+            pass
 
     print("[v] Menghapus log lama...")
     os.system('su -c "logcat -c"')
