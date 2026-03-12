@@ -3,7 +3,7 @@ import re
 import time
 import json
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import sys
 
@@ -19,6 +19,7 @@ INTERVAL = config.get("check_interval", 10)
 WEBHOOK = config.get("discord_webhook", "")
 CODE = config.get("server_code", "")
 CONFIG_PACKAGE = config.get("package", "")
+AFK_TIMEOUT_MIN = config.get("afk_timeout_minutes", 20)
 
 # ANSI color codes
 GREEN = "\033[92m"
@@ -96,31 +97,75 @@ def get_memory_info():
         return 0, 0, 0
 
 def check_game_status(since_dt=None):
-    if since_dt:
-        time_str = since_dt.strftime("%m-%d %H:%M:%S.000")
-        time_filter = f'-T "{time_str}"'
-    else:
-        time_filter = "-d -t 1000"
-    cmd = (
-        f'su -c "logcat {time_filter} 2>/dev/null | '
-        f'grep -Ei \'Error Code:|Connection lost|Disconnected|appStopped=true|'
-        f'was kicked|removed from|You were kicked\'"'
-    )
+    """Check for critical error patterns dalam logcat (crash, kick, ban, etc)."""
+    # Get recent logs (last 2000 lines to cover 20 min at high volume)
+    cmd = 'su -c "logcat -d -t 2000 2>/dev/null"'
     logs = os.popen(cmd).read()
-    triggers = [
-        "Error Code: 266", "Error Code: 267", "Error Code: 268",
-        "Error Code: 277", "Error Code: 279", "Connection lost",
-        "Disconnected from server", "appStopped=true",
-        "was kicked", "removed from", "You were kicked",
+    
+    # Cari keywords: kick, ban, removed, error code, connection lost
+    keywords = [
+        ("Error Code: 26[0-9]", "AFK Timeout"),
+        ("Error Code: 27[0-9]", "Connection Error"),
+        (r"you.*kicked|was.*kicked", "Kicked"),
+        (r"you.*banned|was.*banned", "Banned"),
+        (r"removed from|server full", "Removed"),
+        (r"Connection.*lost|Disconnect", "Disconnected"),
     ]
-    for trigger in triggers:
-        if trigger.lower() in logs.lower():
-            return True, trigger
+    
+    for pattern, reason in keywords:
+        if re.search(pattern, logs, re.IGNORECASE):
+            return True, reason
+    
     return False, None
 
 def is_package_running(package):
     pid = os.popen(f'su -c "pidof {package}" 2>/dev/null').read().strip()
     return pid, bool(pid)
+
+def get_last_roblox_log_time(package):
+    """Return timestamp of last Roblox log output, or None if no recent logs."""
+    # Get last 50 Roblox logs dengan timestamp
+    cmd = f'su -c "logcat -d -t 1000 2>/dev/null | grep -E \'Roblox|{package}\' | tail -10"'
+    logs = os.popen(cmd).read().strip().split('\n')
+    if not logs or not logs[0]:
+        return None
+    # Extract timestamp dari baris terakhir (format: MM-DD HH:MM:SS.mmm)
+    last_line = logs[-1]
+    match = re.search(r'(\d{2}-\d{2}\s\d{2}:\d{2}:\d{2})', last_line)
+    if match:
+        time_str = match.group(1)
+        try:
+            return datetime.strptime(time_str, "%m-%d %H:%M:%S")
+        except:
+            return None
+    return None
+
+def check_afk_timeout(package, join_time, last_activity_time):
+    """
+    Deteksi AFK freeze: 
+    - Process running tapi tidak ada log activity > AFK_TIMEOUT_MIN
+    - Berarti game freezed/idle terlalu lama
+    """
+    pid, is_running = is_package_running(package)
+    if not is_running:
+        return False, None
+    
+    # Update last activity time jika ada log baru
+    last_log = get_last_roblox_log_time(package)
+    if last_log and (not last_activity_time or last_log > last_activity_time):
+        last_activity_time = last_log
+    
+    # Jika tidak ada activity record, anggap sekarang
+    if not last_activity_time:
+        last_activity_time = datetime.now()
+    
+    time_since_activity = datetime.now() - last_activity_time
+    timeout_delta = timedelta(minutes=AFK_TIMEOUT_MIN)
+    
+    if time_since_activity > timeout_delta:
+        return True, f"AFK {int(time_since_activity.total_seconds() / 60)} min"
+    
+    return False, None
 
 def kill_roblox(package):
     print(f"[!] Killing {package} & Cleaning Logs...")
@@ -194,11 +239,12 @@ def monitor():
     os.system('su -c "logcat -c"')
     time.sleep(1)
 
-    join_times = {pkg: datetime.now() for pkg in packages}
+    # Track join time dan last activity time per package
+    pkg_state = {pkg: {'join_time': datetime.now(), 'last_activity': datetime.now()} for pkg in packages}
     check_count = 0
     while True:
         check_count = (check_count % len(packages)) + 1
-        is_error, reason = check_game_status(min(join_times.values()) if join_times else None)
+        is_error, reason = check_game_status()
 
         packages_info = []
         for pkg in packages:
@@ -217,8 +263,21 @@ def monitor():
                 send_discord(f"❌ {pkg} Crash! Membuka ulang...")
                 kill_roblox(pkg)
                 join_server(pkg)
-                join_times[pkg] = datetime.now()
+                pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                 usernames[pkg] = get_roblox_username(pkg)
+
+        # Check AFK timeout (game freezed, no activity)
+        for pkg, username, running in packages_info:
+            if running and pkg not in crashed:
+                is_afk, afk_reason = check_afk_timeout(pkg, pkg_state[pkg]['join_time'], pkg_state[pkg]['last_activity'])
+                if is_afk:
+                    print(f"\n[{time.strftime('%H:%M:%S')}] ⏱️  AFK Detected: {afk_reason} [{pkg}]")
+                    send_discord(f"⏱️ {pkg} AFK/Freezed! {afk_reason}. Reconnecting...")
+                    kill_roblox(pkg)
+                    join_server(pkg)
+                    pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
+                    usernames[pkg] = get_roblox_username(pkg)
+                    break
 
         # Handle global disconnect / error detected in logcat (reconnect one package)
         if is_error:
@@ -228,7 +287,7 @@ def monitor():
                     send_discord(f"⚠️ {pkg} Terputus! Alasan: {reason}. Rejoining...")
                     kill_roblox(pkg)
                     join_server(pkg)
-                    join_times[pkg] = datetime.now()
+                    pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                     usernames[pkg] = get_roblox_username(pkg)
                     break  # one reconnect per check cycle
 
