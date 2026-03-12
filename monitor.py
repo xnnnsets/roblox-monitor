@@ -3,6 +3,7 @@ import re
 import time
 import json
 import subprocess
+from datetime import datetime
 import requests
 import sys
 
@@ -51,26 +52,31 @@ def find_roblox_packages():
     return [CONFIG_PACKAGE or "com.roblox.client"]
 
 def get_roblox_username(package):
-    """Try to get the Roblox username stored in the package's shared preferences."""
-    # Try reading from shared_prefs XML files
+    """Scan all app data files then logcat for the Roblox username."""
+    # Method 1: search all JSON/XML files in app data directory
     raw = os.popen(
-        f'su -c "grep -r \'username\\|Username\\|robloxUsername\' '
-        f'/data/data/{package}/shared_prefs/ 2>/dev/null | head -10"'
+        f'su -c "find /data/data/{package} -type f \\( -name \'*.json\' -o -name \'*.xml\' \\) 2>/dev/null'
+        f' | xargs grep -hi \'username\' 2>/dev/null | head -30"'
     ).read()
-    match = re.search(r'name="[Uu]ser[Nn]ame"[^>]*>([^<\s]+)<', raw)
-    if match:
-        return match.group(1)
-    # Broader key scan
-    match = re.search(r'[Uu]ser[Nn]ame["\s]*[:=>]+["\s]*([A-Za-z0-9_]+)', raw)
-    if match:
-        return match.group(1)
-    # Try logcat as last resort
+    for pattern in [
+        r'"[Uu]ser[Nn]ame"\s*:\s*"([A-Za-z0-9_]{3,20})"',
+        r'name="[Uu]ser[Nn]ame"[^>]*>([A-Za-z0-9_]{3,20})<',
+        r'[Uu]ser[Nn]ame["\s]*[:=>]+["\s]*([A-Za-z0-9_]{3,20})',
+    ]:
+        m = re.search(pattern, raw)
+        if m and m.group(1).lower() not in ('null', 'true', 'false', 'string'):
+            return m.group(1)
+    # Method 2: logcat — Roblox logs username on login
     logcat = os.popen(
-        f'su -c "logcat -d -t 100 2>/dev/null | grep -i \'username\' | tail -5"'
+        f'su -c "logcat -d -t 500 2>/dev/null | grep -Ei \'username|playername\' | tail -20"'
     ).read()
-    match = re.search(r'[Uu]ser[Nn]ame[\'"]?\s*[:=]\s*[\'"]?([A-Za-z0-9_]+)', logcat)
-    if match:
-        return match.group(1)
+    for pattern in [
+        r'"[Uu]ser[Nn]ame"\s*[=:]\s*"([A-Za-z0-9_]{3,20})"',
+        r'[Uu]ser[Nn]ame["\s=:]+([A-Za-z0-9_]{3,20})',
+    ]:
+        m = re.search(pattern, logcat)
+        if m and m.group(1).lower() not in ('null', 'true', 'false', 'string'):
+            return m.group(1)
     return "unknown"
 
 def get_memory_info():
@@ -89,12 +95,23 @@ def get_memory_info():
     except Exception:
         return 0, 0, 0
 
-def check_game_status():
-    cmd = 'su -c "logcat -d -t 200 2>/dev/null | grep -Ei \'com.roblox|Disconnect|Error Code:|Connection lost|appStopped=true|kick\'"'
+def check_game_status(since_dt=None):
+    if since_dt:
+        time_str = since_dt.strftime("%m-%d %H:%M:%S.000")
+        time_filter = f'-T "{time_str}"'
+    else:
+        time_filter = "-d -t 1000"
+    cmd = (
+        f'su -c "logcat {time_filter} 2>/dev/null | '
+        f'grep -Ei \'Error Code:|Connection lost|Disconnected|appStopped=true|'
+        f'was kicked|removed from|You were kicked\'"'
+    )
     logs = os.popen(cmd).read()
     triggers = [
+        "Error Code: 266", "Error Code: 267", "Error Code: 268",
         "Error Code: 277", "Error Code: 279", "Connection lost",
-        "Disconnected from server", "appStopped=true", "was kicked"
+        "Disconnected from server", "appStopped=true",
+        "was kicked", "removed from", "You were kicked",
     ]
     for trigger in triggers:
         if trigger.lower() in logs.lower():
@@ -177,10 +194,11 @@ def monitor():
     os.system('su -c "logcat -c"')
     time.sleep(1)
 
+    join_times = {pkg: datetime.now() for pkg in packages}
     check_count = 0
     while True:
         check_count = (check_count % len(packages)) + 1
-        is_error, reason = check_game_status()
+        is_error, reason = check_game_status(min(join_times.values()) if join_times else None)
 
         packages_info = []
         for pkg in packages:
@@ -199,6 +217,7 @@ def monitor():
                 send_discord(f"❌ {pkg} Crash! Membuka ulang...")
                 kill_roblox(pkg)
                 join_server(pkg)
+                join_times[pkg] = datetime.now()
                 usernames[pkg] = get_roblox_username(pkg)
 
         # Handle global disconnect / error detected in logcat (reconnect one package)
@@ -209,6 +228,7 @@ def monitor():
                     send_discord(f"⚠️ {pkg} Terputus! Alasan: {reason}. Rejoining...")
                     kill_roblox(pkg)
                     join_server(pkg)
+                    join_times[pkg] = datetime.now()
                     usernames[pkg] = get_roblox_username(pkg)
                     break  # one reconnect per check cycle
 
