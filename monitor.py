@@ -53,6 +53,25 @@ def find_roblox_packages():
     # Fallback to config or default
     return [CONFIG_PACKAGE or "com.roblox.client"]
 
+def get_activity_name(package):
+    """Detect main activity name for a package using pm dump."""
+    cmd = f'su -c "pm dump {package} 2>/dev/null | grep -m1 android.intent.action.MAIN | grep cmp= | sed \'s/.*cmp=//\' | cut -d \'{\' -f2 | cut -d \'/\' -f1"'
+    result = os.popen(cmd).read().strip()
+    if result:
+        return result
+    # Fallback to common Roblox activity names
+    for activity in [
+        "com.roblox.client.ActivityNativeMain",
+        "com.roblox.client.RobloxActivity",
+        f"{package}.ActivityNativeMain",
+        f"{package}.RobloxActivity",
+        f"{package}.MainActivity",
+    ]:
+        # Try simple test, if activity starts with package name, likely valid
+        if activity.startswith(package):
+            return activity
+    return f"{package}.ActivityNativeMain"
+
 def get_roblox_username(package):
     """Scan all app data files then logcat for the Roblox username."""
     # Method 1: search all JSON/XML files in app data directory
@@ -188,11 +207,11 @@ def kill_roblox(package):
     os.system(f'su -c "am force-stop {package}"')
     os.system('su -c "logcat -c"')
 
-def join_server(package):
+def join_server(package, activity_name):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
     print(f"[+] Launching: {link}")
-    # Specify package explicitly to avoid "choose app" prompt when multiple Roblox apps exist
-    os.system(f'su -c "am start -n {package}/.ActivityNativeMain -a android.intent.action.VIEW -d \'{link}\'"')
+    # Specify package + activity explicitly to avoid prompt when multiple Roblox apps exist
+    os.system(f'su -c "am start -n {package}/{activity_name} -a android.intent.action.VIEW -d \'{link}\'"')
     print("[*] Menunggu game loading untuk auto-tap...")
     time.sleep(20)
     print("[+] Melakukan Auto-Tap agar tidak idle...")
@@ -246,25 +265,57 @@ def monitor():
     packages = find_roblox_packages()
     print(f"[v] Ditemukan {len(packages)} paket: {', '.join(packages)}")
 
+    # Get activity names for each package
+    print("[v] Mendeteksi activity names...")
+    activity_map = {}
+    for pkg in packages:
+        activity_map[pkg] = get_activity_name(pkg)
+        print(f"    {pkg} -> {activity_map[pkg]}")
+
     print("[v] Membaca username Roblox...")
     usernames = {}
     for pkg in packages:
         usernames[pkg] = get_roblox_username(pkg)
         print(f"    {pkg} -> {usernames[pkg]}")
 
+    # Ask user: monitor all or select one
+    target_packages = packages
+    if len(packages) > 1:
+        print("\n" + "="*50)
+        print("Pilihan Monitor:")
+        print("1. Monitor SEMUA Roblox apps")
+        for i, pkg in enumerate(packages, start=2):
+            print(f"{i}. Monitor hanya {pkg} ({usernames[pkg]})")
+        print("="*50)
+        choice = input("Pilih nomor (default 1): ").strip() or "1"
+        try:
+            choice_idx = int(choice) - 1
+            if choice_idx == 0:
+                target_packages = packages
+                print(f"✓ Monitor SEMUA ({len(packages)} apps)")
+            elif 0 < choice_idx < len(packages) + 1:
+                target_packages = [packages[choice_idx - 1]]
+                print(f"✓ Monitor hanya: {target_packages[0]} ({usernames[target_packages[0]]})")
+            else:
+                print("❌ Pilihan invalid, default ke monitor semua.")
+                target_packages = packages
+        except ValueError:
+            print("❌ Input invalid, default ke monitor semua.")
+            target_packages = packages
+
     print("[v] Menghapus log lama...")
     os.system('su -c "logcat -c"')
     time.sleep(1)
 
     # Track join time dan last activity time per package
-    pkg_state = {pkg: {'join_time': datetime.now(), 'last_activity': datetime.now()} for pkg in packages}
+    pkg_state = {pkg: {'join_time': datetime.now(), 'last_activity': datetime.now()} for pkg in target_packages}
     check_count = 0
     while True:
-        check_count = (check_count % len(packages)) + 1
+        check_count = (check_count % len(target_packages)) + 1
         is_error, reason = check_game_status()
 
         packages_info = []
-        for pkg in packages:
+        for pkg in target_packages:
             pid, running = is_package_running(pkg)
             packages_info.append((pkg, usernames[pkg], running))
 
@@ -279,7 +330,7 @@ def monitor():
                 print(f"\n[{time.strftime('%H:%M:%S')}] ❌ {pkg} Crash/Mati")
                 send_discord(f"❌ {pkg} Crash! Membuka ulang...")
                 kill_roblox(pkg)
-                join_server(pkg)
+                join_server(pkg, activity_map[pkg])
                 pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                 usernames[pkg] = get_roblox_username(pkg)
 
@@ -296,7 +347,7 @@ def monitor():
                     print(f"\n[{time.strftime('%H:%M:%S')}] ⏱️  AFK Detected: {afk_reason} [{pkg}]")
                     send_discord(f"⏱️ {pkg} AFK/Freezed! {afk_reason}. Reconnecting...")
                     kill_roblox(pkg)
-                    join_server(pkg)
+                    join_server(pkg, activity_map[pkg])
                     pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                     usernames[pkg] = get_roblox_username(pkg)
                     break
@@ -308,7 +359,7 @@ def monitor():
                     print(f"\n[{time.strftime('%H:%M:%S')}] ⚠️  Error: {reason} [{pkg}]")
                     send_discord(f"⚠️ {pkg} Terputus! Alasan: {reason}. Rejoining...")
                     kill_roblox(pkg)
-                    join_server(pkg)
+                    join_server(pkg, activity_map[pkg])
                     pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                     usernames[pkg] = get_roblox_username(pkg)
                     break  # one reconnect per check cycle
