@@ -384,15 +384,19 @@ def monitor():
 
         # Handle crashed (not running) packages first
         crashed = set()
-        for pkg, username, running in packages_info:
-            if not running:
-                crashed.add(pkg)
-                print(f"\n[{time.strftime('%H:%M:%S')}] ❌ {pkg} Crash/Mati")
-                send_discord(f"❌ {pkg} Crash! Membuka ulang...")
-                kill_roblox(pkg)
-                join_server(pkg, activity_map[pkg])
-                pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
-                usernames[pkg] = get_roblox_username(pkg)
+        crashed_pkgs = [pkg for pkg, username, running in packages_info if not running]
+        for i, pkg in enumerate(crashed_pkgs):
+            crashed.add(pkg)
+            print(f"\n[{time.strftime('%H:%M:%S')}] ❌ {pkg} Crash/Mati")
+            send_discord(f"❌ {pkg} Crash! Membuka ulang...")
+            kill_roblox(pkg)
+            join_server(pkg, activity_map[pkg])
+            pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
+            usernames[pkg] = get_roblox_username(pkg)
+            # Jeda 30 detik antar app jika ada lebih dari 1 yang harus dibuka
+            if i < len(crashed_pkgs) - 1:
+                print(f"[*] Menunggu 30 detik sebelum membuka app berikutnya...")
+                time.sleep(30)
 
         # Check AFK timeout (game freezed, no activity)
         for pkg, username, running in packages_info:
