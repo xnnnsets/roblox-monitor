@@ -19,7 +19,8 @@ INTERVAL = config.get("check_interval", 10)
 WEBHOOK = config.get("discord_webhook", "")
 CODE = config.get("server_code", "")
 CONFIG_PACKAGE = config.get("package", "")
-AFK_TIMEOUT_MIN = config.get("afk_timeout_minutes", 20)
+AFK_TIMEOUT_MIN = float(config.get("afk_timeout_minutes", 20))
+LOG_SCAN_LINES = int(config.get("log_scan_lines", 4000))
 
 # ANSI color codes
 GREEN = "\033[92m"
@@ -96,26 +97,37 @@ def get_memory_info():
     except Exception:
         return 0, 0, 0
 
-def check_game_status(since_dt=None):
-    """Check for critical error patterns dalam logcat (crash, kick, ban, etc)."""
-    # Get recent logs (last 2000 lines to cover 20 min at high volume)
-    cmd = 'su -c "logcat -d -t 2000 2>/dev/null"'
-    logs = os.popen(cmd).read()
-    
-    # Cari keywords: kick, ban, removed, error code, connection lost
-    keywords = [
-        ("Error Code: 26[0-9]", "AFK Timeout"),
-        ("Error Code: 27[0-9]", "Connection Error"),
-        (r"you.*kicked|was.*kicked", "Kicked"),
-        (r"you.*banned|was.*banned", "Banned"),
-        (r"removed from|server full", "Removed"),
-        (r"Connection.*lost|Disconnect", "Disconnected"),
+def read_recent_roblox_logs():
+    """Return recent Roblox-focused logcat lines so disconnect logs are not buried by system noise."""
+    cmd = (
+        f"su -c \"logcat -d -t {LOG_SCAN_LINES} 2>/dev/null"
+        f" | grep -Ei 'Roblox  :|rbx\\.|com\\.roblox\\.client'"
+        f" | tail -250\""
+    )
+    return os.popen(cmd).read()
+
+
+def check_game_status():
+    """Check Roblox-specific disconnect patterns from recent logcat output."""
+    logs = read_recent_roblox_logs()
+    if not logs.strip():
+        return False, None
+
+    patterns = [
+        (r"Sending disconnect with reason:\s*277", "Disconnect reason 277"),
+        (r"Sending disconnect with reason:\s*26[0-9]", "AFK disconnect"),
+        (r"Lost connection with reason\s*:\s*Lost connection to the game server", "Lost connection to game server"),
+        (r"\[FLog::Network\]\s+Connection lost", "Connection lost"),
+        (r"ID_CONNECTION_LOST", "ID_CONNECTION_LOST"),
+        (r"AckTimeout", "AckTimeout"),
+        (r"SignalRCoreError.*Disconnected", "SignalR disconnected"),
+        (r"Session Transition FSM:\s*Error Occurred", "Session transition error"),
     ]
-    
-    for pattern, reason in keywords:
+
+    for pattern, reason in patterns:
         if re.search(pattern, logs, re.IGNORECASE):
             return True, reason
-    
+
     return False, None
 
 def is_package_running(package):
@@ -124,8 +136,12 @@ def is_package_running(package):
 
 def get_last_roblox_log_time(package):
     """Return timestamp of last Roblox log output, or None if no recent logs."""
-    # Get last 50 Roblox logs dengan timestamp
-    cmd = f'su -c "logcat -d -t 1000 2>/dev/null | grep -E \'Roblox|{package}\' | tail -10"'
+    # Get recent Roblox logs with timestamp
+    cmd = (
+        f"su -c \"logcat -d -t {LOG_SCAN_LINES} 2>/dev/null"
+        f" | grep -Ei 'Roblox  :|rbx\\.|{package}'"
+        f" | tail -20\""
+    )
     logs = os.popen(cmd).read().strip().split('\n')
     if not logs or not logs[0]:
         return None
@@ -148,7 +164,7 @@ def check_afk_timeout(package, join_time, last_activity_time):
     """
     pid, is_running = is_package_running(package)
     if not is_running:
-        return False, None
+        return False, None, last_activity_time
     
     # Update last activity time jika ada log baru
     last_log = get_last_roblox_log_time(package)
@@ -163,9 +179,9 @@ def check_afk_timeout(package, join_time, last_activity_time):
     timeout_delta = timedelta(minutes=AFK_TIMEOUT_MIN)
     
     if time_since_activity > timeout_delta:
-        return True, f"AFK {int(time_since_activity.total_seconds() / 60)} min"
+        return True, f"AFK {int(time_since_activity.total_seconds() / 60)} min", last_activity_time
     
-    return False, None
+    return False, None, last_activity_time
 
 def kill_roblox(package):
     print(f"[!] Killing {package} & Cleaning Logs...")
@@ -269,7 +285,12 @@ def monitor():
         # Check AFK timeout (game freezed, no activity)
         for pkg, username, running in packages_info:
             if running and pkg not in crashed:
-                is_afk, afk_reason = check_afk_timeout(pkg, pkg_state[pkg]['join_time'], pkg_state[pkg]['last_activity'])
+                is_afk, afk_reason, last_activity = check_afk_timeout(
+                    pkg,
+                    pkg_state[pkg]['join_time'],
+                    pkg_state[pkg]['last_activity'],
+                )
+                pkg_state[pkg]['last_activity'] = last_activity
                 if is_afk:
                     print(f"\n[{time.strftime('%H:%M:%S')}] ⏱️  AFK Detected: {afk_reason} [{pkg}]")
                     send_discord(f"⏱️ {pkg} AFK/Freezed! {afk_reason}. Reconnecting...")
