@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/data/data/com.termux/files/usr/bin/sh
 
 REPO_URL="https://github.com/xnnnsets/roblox-monitor"
 REPO_DIR="$HOME/roblox-monitor"
@@ -10,7 +10,7 @@ echo "=========================================="
 
 # ---------- Root check ----------
 echo "[*] Mengetes akses Root..."
-if ! su -c "id" &> /dev/null; then
+if ! su -c "id" >/dev/null 2>&1; then
     echo "------------------------------------------"
     echo " [!] ERROR: AKSES ROOT DITOLAK / TIDAK ADA"
     echo " Tolong klik 'GRANT/IZINKAN' pada pop-up"
@@ -23,7 +23,7 @@ echo "[v] Akses Root aman."
 # ---------- Auto-clone repo if missing ----------
 if [ ! -d "$REPO_DIR/.git" ]; then
     echo "[*] Repo tidak ditemukan. Mengkloning dari GitHub..."
-    if ! command -v git &> /dev/null; then
+    if ! command -v git >/dev/null 2>&1; then
         pkg install git -y
         if [ $? -ne 0 ]; then
             echo "[!] Gagal menginstall git. Periksa koneksi internet."
@@ -43,10 +43,9 @@ fi
 # ---------- Install dependencies ----------
 echo "[*] Memeriksa & menginstall tools..."
 pkg update -y
-dependencies=("python" "tsu" "grep" "procps" "git")
 
-for tool in "${dependencies[@]}"; do
-    if ! command -v $tool &> /dev/null; then
+for tool in python tsu grep procps git; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
         echo "    Installing $tool..."
         pkg install "$tool" -y
     else
@@ -54,7 +53,7 @@ for tool in "${dependencies[@]}"; do
     fi
 done
 
-if ! python -c "import requests" &> /dev/null; then
+if ! python -c "import requests" >/dev/null 2>&1; then
     echo "[*] Installing Python requests..."
     pip install requests
 else
