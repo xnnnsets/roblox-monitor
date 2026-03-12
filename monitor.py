@@ -55,7 +55,7 @@ def find_roblox_packages():
 
 def get_activity_name(package):
     """Detect main activity name for a package using pm dump."""
-    cmd = f'su -c "pm dump {package} 2>/dev/null | grep -m1 android.intent.action.MAIN | grep cmp= | sed \'s/.*cmp=//\' | cut -d \'{\' -f2 | cut -d \'/\' -f1"'
+    cmd = f"su -c \"pm dump {package} 2>/dev/null | grep -m1 android.intent.action.MAIN | grep cmp= | sed 's/.*cmp=//' | cut -d '{{' -f2 | cut -d '/' -f1\""
     result = os.popen(cmd).read().strip()
     if result:
         return result
