@@ -2,6 +2,7 @@
 
 REPO_URL="https://github.com/xnnnsets/roblox-monitor"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_BACKUP="$HOME/.roblox-monitor-config.backup.json"
 
 if [ -d "$SCRIPT_DIR/.git" ]; then
     REPO_DIR="$SCRIPT_DIR"
@@ -23,14 +24,35 @@ print_header() {
 }
 
 ensure_repo() {
-    if [ -d "$REPO_DIR/.git" ]; then
-        return 0
-    fi
-    echo "[*] Repo not found, cloning..."
     if ! command -v git >/dev/null 2>&1; then
         pkg install git -y || return 1
     fi
-    git clone "$REPO_URL" "$REPO_DIR" || return 1
+
+    if [ -f "$REPO_DIR/config.json" ]; then
+        cp "$REPO_DIR/config.json" "$CONFIG_BACKUP" 2>/dev/null
+    fi
+
+    if [ -d "$REPO_DIR/.git" ] && [ "$REPO_DIR" = "$SCRIPT_DIR" ]; then
+        echo "[*] Active repo detected, refreshing with git..."
+        cd "$REPO_DIR" || return 1
+        git fetch --all || return 1
+        git reset --hard origin/main || return 1
+        git clean -fd || return 1
+    else
+        if [ -d "$REPO_DIR" ]; then
+            echo "[*] Old repo detected, removing and re-cloning..."
+            rm -rf "$REPO_DIR" || return 1
+        else
+            echo "[*] Repo not found, cloning..."
+        fi
+        git clone "$REPO_URL" "$REPO_DIR" || return 1
+    fi
+
+    if [ -f "$CONFIG_BACKUP" ]; then
+        cp "$CONFIG_BACKUP" "$REPO_DIR/config.json" 2>/dev/null
+        rm -f "$CONFIG_BACKUP"
+    fi
+
     return 0
 }
 
