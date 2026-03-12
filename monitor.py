@@ -54,20 +54,18 @@ def find_roblox_packages():
     return [CONFIG_PACKAGE or "com.roblox.client"]
 
 def get_deeplink_activity(package):
-    """Resolve activity that handles roblox:// deep links for this specific package."""
-    test_uri = "roblox://navigation"
-    # pm resolve-activity shows which activity handles this intent
-    cmd = f"su -c \"pm resolve-activity -a android.intent.action.VIEW -d '{test_uri}' 2>/dev/null\""
+    """Cari activity yang punya intent-filter untuk roblox:// scheme via pm dump."""
+    # pm dump shows the Activity Resolver Table with scheme filters
+    cmd = f"su -c \"pm dump {package} 2>/dev/null | grep -A3 'roblox:'\""
     output = os.popen(cmd).read()
-    # Try to find our package/activity in output
-    # Output format: name=com.roblox.client/com.roblox.client.ActivityNativeMain
-    for pattern in [
-        rf"name={re.escape(package)}/([A-Za-z0-9_.]+)",
-        rf"{re.escape(package)}/([A-Za-z0-9_.]+)",
-    ]:
-        m = re.search(pattern, output)
-        if m:
-            return m.group(1)
+    # Format output: com.roblox.client/.ActivityNativeMain atau com.pkg/full.Class.Name
+    m = re.search(rf"{re.escape(package)}/\.?([A-Za-z0-9_.]+)", output)
+    if m:
+        activity = m.group(1)
+        # Jika nama pendek (misal ActivityNativeMain), expand dengan com.roblox.client prefix
+        if "." not in activity:
+            return f"com.roblox.client.{activity}"
+        return activity
     return None
 
 def get_activity_name(package):
@@ -243,18 +241,39 @@ def join_server(package, activity_name):
     print(f"[+] Joining: {link}")
     print(f"[+] Package: {package}")
     
-    # Gunakan --package agar Android route deep link ke app yg tepat
-    # tanpa perlu guess activity name dan tanpa trigger chooser dialog
-    result = subprocess.run(
-        ["su", "-c", f"am start --package '{package}' -a android.intent.action.VIEW -d '{link}'"],
-        capture_output=True, text=True, timeout=5
-    )
-    out = (result.stdout + result.stderr).strip()
-    print(f"    {out[:120]}")
-    if result.returncode == 0 and 'error' not in out.lower():
-        print(f"[✓] Launched {package}")
-    else:
-        print(f"[!] --package failed, fallback to implicit intent...")
+    launched = False
+    
+    # Step 1: Cari activity yang handle roblox:// scheme dari pm dump
+    resolved = get_deeplink_activity(package)
+    if resolved:
+        print(f"[*] Deeplink activity ditemukan: {resolved}")
+    
+    # Daftar activity untuk dicoba (hindari splash)
+    activities_to_try = []
+    for act in [
+        resolved,
+        "com.roblox.client.ActivityNativeMain",
+        f"{package}.ActivityNativeMain",
+        "com.roblox.client.RobloxActivity",
+    ]:
+        if act and act not in activities_to_try and 'splash' not in act.lower():
+            activities_to_try.append(act)
+    
+    for activity in activities_to_try:
+        print(f"[*] Trying: -n {package}/{activity}")
+        result = subprocess.run(
+            ["su", "-c", f"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"],
+            capture_output=True, text=True, timeout=5
+        )
+        out = (result.stdout + result.stderr).strip()
+        print(f"    {out[:100]}")
+        if result.returncode == 0 and 'error' not in out.lower():
+            print(f"[✓] Launched via {activity}")
+            launched = True
+            break
+    
+    if not launched:
+        print("[!] All explicit failed, fallback implicit...")
         subprocess.run(
             ["su", "-c", f"am start -a android.intent.action.VIEW -d '{link}'"],
             capture_output=True, text=True, timeout=5
