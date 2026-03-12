@@ -223,43 +223,42 @@ def kill_roblox(package):
 
 def join_server(package, activity_name):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
-    print(f"[+] Launching: {link} via {package}")
+    print(f"[+] Deep Link: {link}")
+    print(f"[+] Package: {package}")
     
     launched = False
     
-    # Strategy 1: Implicit intent (Android routes deep link automatically) - PALING RELIABLE
-    print("[*] Mencoba implicit intent (Android routing)...")
-    result = os.popen(f'su -c "am start -a android.intent.action.VIEW -d {link}"').read()
-    if "Error" not in result.lower() and "error" not in result.lower():
-        print(f"[✓] Implicit intent berhasil")
-        launched = True
-    else:
-        print(f"[✗] Implicit intent gagal, mencoba explicit package...")
+    # Try explicit activity names (AVOID implicit intent yang trigger chooser dialog)
+    activities_to_try = [activity_name]
+    for act in [
+        f"{package}.ActivityNativeMain",
+        f"{package}.RobloxActivity",
+        f"{package}.MainActivity",
+        "com.roblox.client.ActivityNativeMain",
+    ]:
+        if act not in activities_to_try:
+            activities_to_try.append(act)
+    
+    for activity in activities_to_try:
+        # IMPORTANT: Wrap link dalam single quote agar URL tidak corrupt
+        cmd = f"su -c \"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'\""
+        print(f"[*] Trying: {activity}")
+        print(f"    CMD: {cmd}")
+        result = os.popen(cmd).read()
+        print(f"    RESULT: {result[:100]}")
         
-        # Strategy 2: Try explicit activity names
-        activities_to_try = [activity_name]
-        for act in [
-            f"{package}.ActivityNativeMain",
-            f"{package}.RobloxActivity",
-            f"{package}.MainActivity",
-            "com.roblox.client.ActivityNativeMain",
-        ]:
-            if act not in activities_to_try:
-                activities_to_try.append(act)
-        
-        for activity in activities_to_try:
-            cmd = f'su -c "am start -n {package}/{activity} -a android.intent.action.VIEW -d {link}"'
-            result = os.popen(cmd).read()
-            if "Error" not in result.lower() and "error" not in result.lower():
-                print(f"[✓] Explicit activity berhasil: {activity}")
-                launched = True
-                break
-            else:
-                print(f"[✗] {activity} failed")
+        if "Error" not in result and "error" not in result:
+            print(f"[✓] SUCCESS via {activity}")
+            launched = True
+            break
+        else:
+            print(f"[✗] Failed")
     
     if not launched:
-        print("[!] Semua strategy gagal, trying last resort...")
-        os.system(f'su -c "am start -a android.intent.action.VIEW --user 0 -d {link}"')
+        print("[!] All activities failed, trying implicit as last resort...")
+        cmd = f'su -c "am start -a android.intent.action.VIEW -d \'{link}\'"'
+        print(f"    CMD: {cmd}")
+        os.system(cmd)
     
     print("[*] Menunggu game loading untuk auto-tap...")
     time.sleep(20)
