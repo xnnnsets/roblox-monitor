@@ -269,21 +269,52 @@ def find_task_id(package):
     return None
 
 def get_grid_bounds(index, total, width, height):
-    cols = max(1, math.ceil(math.sqrt(total)))
-    rows = max(1, math.ceil(total / cols))
-    gap = 16
-    top_offset = 70
+    total = max(1, total)
+    gap = 10
+    top_offset = 58
+    bottom_margin = 12
+    is_landscape = width > height
 
-    cell_w = max(320, width // cols)
-    cell_h = max(320, (height - top_offset) // rows)
+    # Dock semua jendela ke sisi kanan layar
+    dock_ratio = 0.56 if is_landscape else 0.50
+    dock_width = max(260, int(width * dock_ratio))
+    dock_left = max(0, width - dock_width)
+
+    available_w = max(200, dock_width - (gap * 2))
+    available_h = max(260, height - top_offset - bottom_margin - gap)
+
+    # Landscape lebih padat kolom agar muat banyak app
+    if is_landscape:
+        cols = 4 if total >= 8 else (3 if total >= 4 else 2)
+    else:
+        cols = 2 if total > 1 else 1
+
+    cols = max(1, min(cols, total))
+    rows = max(1, math.ceil(total / cols))
+
+    cell_w = (available_w - (gap * (cols - 1))) // cols
+    cell_h = (available_h - (gap * (rows - 1))) // rows
+
+    # Paksa ukuran kecil agar muat lebih banyak Roblox
+    max_w = 280 if is_landscape else 240
+    max_h = 220 if is_landscape else 300
+    min_w = 120
+    min_h = 140 if is_landscape else 170
+    cell_w = max(min_w, min(cell_w, max_w))
+    cell_h = max(min_h, min(cell_h, max_h))
 
     row = index // cols
     col = index % cols
 
-    left = col * cell_w + gap
-    top = top_offset + row * cell_h + gap
-    right = min(width - gap, (col + 1) * cell_w - gap)
-    bottom = min(height - gap, top_offset + (row + 1) * cell_h - gap)
+    used_w = cols * cell_w + (cols - 1) * gap
+    start_x = width - gap - used_w
+    if start_x < dock_left + gap:
+        start_x = dock_left + gap
+
+    left = start_x + col * (cell_w + gap)
+    top = top_offset + gap + row * (cell_h + gap)
+    right = min(width - gap, left + cell_w)
+    bottom = min(height - gap, top + cell_h)
 
     return left, top, right, bottom
 
