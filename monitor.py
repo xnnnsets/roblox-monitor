@@ -228,7 +228,7 @@ def join_server(package, activity_name):
     
     launched = False
     
-    # Try explicit activity names (AVOID implicit intent yang trigger chooser dialog)
+    # Strategy 1: Try explicit activities with proper subprocess array (NO shell escaping issues)
     activities_to_try = [activity_name]
     for act in [
         f"{package}.ActivityNativeMain",
@@ -240,32 +240,49 @@ def join_server(package, activity_name):
             activities_to_try.append(act)
     
     for activity in activities_to_try:
-        # IMPORTANT: Wrap link dalam single quote agar URL tidak corrupt
-        cmd = f"su -c \"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'\""
-        print(f"[*] Trying: {activity}")
-        print(f"    CMD: {cmd}")
-        result = os.popen(cmd).read()
-        print(f"    RESULT: {result[:100]}")
-        
-        if "Error" not in result and "error" not in result:
-            print(f"[✓] SUCCESS via {activity}")
-            launched = True
-            break
-        else:
-            print(f"[✗] Failed")
+        try:
+            print(f"[*] Trying explicit: {activity}")
+            # Use subprocess.run with array (PROPER way, NO shell escaping issues)
+            result = subprocess.run(
+                ["su", "-c", f"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            print(f"    OUTPUT: {result.stdout[:80] if result.stdout else 'OK'}")
+            
+            if result.returncode == 0 or "Error" not in result.stdout.lower():
+                print(f"[✓] SUCCESS via {activity}")
+                launched = True
+                break
+            else:
+                print(f"[✗] {result.stdout[:50]}")
+        except Exception as e:
+            print(f"[✗] Exception: {e}")
     
+    # Strategy 2: If explicit failed, try implicit intent (let Android route the scheme)
     if not launched:
-        print("[!] All activities failed, trying implicit as last resort...")
-        cmd = f'su -c "am start -a android.intent.action.VIEW -d \'{link}\'"'
-        print(f"    CMD: {cmd}")
-        os.system(cmd)
+        print("[!] Explicit failed, trying implicit intent (Android will route)...")
+        try:
+            result = subprocess.run(
+                ["su", "-c", f"am start -a android.intent.action.VIEW -d '{link}'"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            print(f"    OUTPUT: {result.stdout[:80] if result.stdout else 'OK'}")
+            if result.returncode == 0:
+                print(f"[✓] Implicit intent success")
+                launched = True
+        except Exception as e:
+            print(f"[✗] Exception: {e}")
     
     print("[*] Menunggu game loading untuk auto-tap...")
     time.sleep(20)
     print("[+] Melakukan Auto-Tap agar tidak idle...")
-    os.system('su -c "input tap 500 1000"')
+    subprocess.run(["su", "-c", "input tap 500 1000"], capture_output=True)
     time.sleep(2)
-    os.system('su -c "input tap 500 1000"')
+    subprocess.run(["su", "-c", "input tap 500 1000"], capture_output=True)
 
 def display_dashboard(packages_info, memory_info, check_count):
     """Render a bordered table: PACKAGE (username) | STATUS, plus a memory row."""
