@@ -3,6 +3,7 @@ import re
 import time
 import json
 import subprocess
+import math
 from datetime import datetime, timedelta
 import requests
 import sys
@@ -21,6 +22,8 @@ CODE = config.get("server_code", "")
 CONFIG_PACKAGE = config.get("package", "")
 AFK_TIMEOUT_MIN = float(config.get("afk_timeout_minutes", 20))
 LOG_SCAN_LINES = int(config.get("log_scan_lines", 4000))
+AUTO_FLOAT_GRID = bool(config.get("auto_float_grid", True))
+FLOAT_START_DELAY = int(config.get("float_start_delay_seconds", 3))
 
 # ANSI color codes
 GREEN = "\033[92m"
@@ -236,7 +239,90 @@ def kill_roblox(package):
     os.system(f'su -c "am force-stop {package}"')
     os.system('su -c "logcat -c"')
 
-def join_server(package, activity_name):
+def run_su(command, timeout=8):
+    try:
+        result = subprocess.run(["su", "-c", command], capture_output=True, text=True, timeout=timeout)
+        output = ((result.stdout or "") + (result.stderr or "")).strip()
+        return result.returncode, output
+    except Exception as e:
+        return 1, str(e)
+
+def get_screen_size():
+    code, output = run_su("wm size 2>/dev/null")
+    if code == 0:
+        m = re.search(r"(\d+)x(\d+)", output)
+        if m:
+            return int(m.group(1)), int(m.group(2))
+    return 1080, 2400
+
+def find_task_id(package):
+    commands = [
+        f"dumpsys activity activities 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
+        f"dumpsys activity recents 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
+        f"am stack list 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
+    ]
+    for cmd in commands:
+        _, output = run_su(cmd)
+        m = re.search(r"taskId=(\d+)", output)
+        if m:
+            return int(m.group(1))
+    return None
+
+def get_grid_bounds(index, total, width, height):
+    cols = max(1, math.ceil(math.sqrt(total)))
+    rows = max(1, math.ceil(total / cols))
+    gap = 16
+    top_offset = 70
+
+    cell_w = max(320, width // cols)
+    cell_h = max(320, (height - top_offset) // rows)
+
+    row = index // cols
+    col = index % cols
+
+    left = col * cell_w + gap
+    top = top_offset + row * cell_h + gap
+    right = min(width - gap, (col + 1) * cell_w - gap)
+    bottom = min(height - gap, top_offset + (row + 1) * cell_h - gap)
+
+    return left, top, right, bottom
+
+def apply_float_grid(package, grid_index, grid_total):
+    if not AUTO_FLOAT_GRID or grid_total <= 1:
+        return
+
+    run_su("settings put global enable_freeform_support 1")
+    run_su("settings put global force_resizable_activities 1")
+
+    time.sleep(FLOAT_START_DELAY)
+    task_id = find_task_id(package)
+    if task_id is None:
+        print(f"[!] Float skip: task id tidak ditemukan untuk {package}")
+        return
+
+    width, height = get_screen_size()
+    left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
+
+    float_commands = [
+        f"cmd activity task set-windowing-mode {task_id} 5",
+        f"am stack move-task {task_id} 2 true",
+        f"am task resize {task_id} {left} {top} {right} {bottom}",
+        f"cmd activity task resize {task_id} {left} {top} {right} {bottom}",
+        f"am stack resize 2 {left} {top} {right} {bottom}",
+    ]
+
+    success = False
+    for cmd in float_commands:
+        code, output = run_su(cmd)
+        if code == 0 and "error" not in output.lower() and "unknown" not in output.lower():
+            success = True
+
+    if success:
+        print(f"[✓] Float grid applied: {package} -> [{left},{top},{right},{bottom}]")
+    else:
+        print(f"[!] Float grid tidak didukung penuh di ROM ini ({package})")
+
+def join_server(package, activity_name, grid_index=0, grid_total=1):
     link = f"roblox://navigation/share_links?code={CODE}&type=Server"
     print(f"[+] Joining: {link}")
     print(f"[+] Package: {package}")
@@ -261,23 +347,30 @@ def join_server(package, activity_name):
     
     for activity in activities_to_try:
         print(f"[*] Trying: -n {package}/{activity}")
-        result = subprocess.run(
-            ["su", "-c", f"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"],
-            capture_output=True, text=True, timeout=5
+        start_commands = []
+        if AUTO_FLOAT_GRID:
+            start_commands.append(
+                f"am start --windowingMode 5 -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
+            )
+        start_commands.append(
+            f"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
         )
-        out = (result.stdout + result.stderr).strip()
-        print(f"    {out[:100]}")
-        if result.returncode == 0 and 'error' not in out.lower():
-            print(f"[✓] Launched via {activity}")
-            launched = True
+
+        for start_cmd in start_commands:
+            code, out = run_su(start_cmd, timeout=6)
+            print(f"    {out[:100]}")
+            if code == 0 and 'error' not in out.lower() and 'unknown option' not in out.lower():
+                print(f"[✓] Launched via {activity}")
+                launched = True
+                break
+        if launched:
             break
     
     if not launched:
         print("[!] All explicit failed, fallback implicit...")
-        subprocess.run(
-            ["su", "-c", f"am start -a android.intent.action.VIEW -d '{link}'"],
-            capture_output=True, text=True, timeout=5
-        )
+        run_su(f"am start -a android.intent.action.VIEW -d '{link}'", timeout=6)
+
+    apply_float_grid(package, grid_index, grid_total)
 
 def display_dashboard(packages_info, memory_info, check_count):
     """Render a bordered table: PACKAGE (username) | STATUS, plus a memory row."""
@@ -369,6 +462,8 @@ def monitor():
 
     # Track join time dan last activity time per package
     pkg_state = {pkg: {'join_time': datetime.now(), 'last_activity': datetime.now()} for pkg in target_packages}
+    grid_index_map = {pkg: idx for idx, pkg in enumerate(target_packages)}
+    grid_total = len(target_packages)
     check_count = 0
     while True:
         check_count = (check_count % len(target_packages)) + 1
@@ -390,7 +485,7 @@ def monitor():
             print(f"\n[{time.strftime('%H:%M:%S')}] ❌ {pkg} Crash/Mati")
             send_discord(f"❌ {pkg} Crash! Membuka ulang...")
             kill_roblox(pkg)
-            join_server(pkg, activity_map[pkg])
+            join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total)
             pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
             usernames[pkg] = get_roblox_username(pkg)
             # Jeda 30 detik antar app jika ada lebih dari 1 yang harus dibuka
@@ -411,7 +506,7 @@ def monitor():
                     print(f"\n[{time.strftime('%H:%M:%S')}] ⏱️  AFK Detected: {afk_reason} [{pkg}]")
                     send_discord(f"⏱️ {pkg} AFK/Freezed! {afk_reason}. Reconnecting...")
                     kill_roblox(pkg)
-                    join_server(pkg, activity_map[pkg])
+                    join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total)
                     pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                     usernames[pkg] = get_roblox_username(pkg)
                     break
@@ -423,7 +518,7 @@ def monitor():
                     print(f"\n[{time.strftime('%H:%M:%S')}] ⚠️  Error: {reason} [{pkg}]")
                     send_discord(f"⚠️ {pkg} Terputus! Alasan: {reason}. Rejoining...")
                     kill_roblox(pkg)
-                    join_server(pkg, activity_map[pkg])
+                    join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total)
                     pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                     usernames[pkg] = get_roblox_username(pkg)
                     break  # one reconnect per check cycle
