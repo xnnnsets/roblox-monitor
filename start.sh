@@ -16,6 +16,27 @@ if [ "$1" = "--autorun" ]; then
     AUTO_RUN=1
 fi
 
+t() {
+    if [ "$LANG_CHOICE" = "en" ]; then
+        printf "%s" "$2"
+    else
+        printf "%s" "$1"
+    fi
+}
+
+say() {
+    printf "%s\n" "$(t "$1" "$2")"
+}
+
+load_saved_language() {
+    if [ -f "$REPO_DIR/config.json" ]; then
+        saved_lang="$(grep -o '"language"[[:space:]]*:[[:space:]]*"[a-z][a-z]"' "$REPO_DIR/config.json" 2>/dev/null | head -1 | sed 's/.*"\([a-z][a-z]\)"/\1/')"
+        case "$saved_lang" in
+            en|id) LANG_CHOICE="$saved_lang" ;;
+        esac
+    fi
+}
+
 print_header() {
     clear
     echo "=========================================="
@@ -25,6 +46,7 @@ print_header() {
 
 ensure_repo() {
     if ! command -v git >/dev/null 2>&1; then
+        say "[*] Git belum ada, menginstall..." "[*] Git not found, installing..."
         pkg install git -y || return 1
     fi
 
@@ -33,17 +55,17 @@ ensure_repo() {
     fi
 
     if [ -d "$REPO_DIR/.git" ] && [ "$REPO_DIR" = "$SCRIPT_DIR" ]; then
-        echo "[*] Active repo detected, refreshing with git..."
+        say "[*] Repo aktif terdeteksi, refresh dengan git..." "[*] Active repo detected, refreshing with git..."
         cd "$REPO_DIR" || return 1
         git fetch --all || return 1
         git reset --hard origin/main || return 1
         git clean -fd || return 1
     else
         if [ -d "$REPO_DIR" ]; then
-            echo "[*] Old repo detected, removing and re-cloning..."
+            say "[*] Repo lama terdeteksi, hapus dan clone ulang..." "[*] Old repo detected, removing and re-cloning..."
             rm -rf "$REPO_DIR" || return 1
         else
-            echo "[*] Repo not found, cloning..."
+            say "[*] Repo tidak ditemukan, cloning..." "[*] Repo not found, cloning..."
         fi
         git clone "$REPO_URL" "$REPO_DIR" || return 1
     fi
@@ -57,16 +79,17 @@ ensure_repo() {
 }
 
 ensure_deps() {
-    echo "[*] Checking dependencies..."
+    say "[*] Memeriksa dependencies..." "[*] Checking dependencies..."
     pkg update -y >/dev/null 2>&1
     for tool in python tsu grep procps git; do
         if ! command -v "$tool" >/dev/null 2>&1; then
-            echo "    Installing $tool..."
+            printf "    %s\n" "$(t "Menginstall $tool..." "Installing $tool...")"
             pkg install "$tool" -y || return 1
         fi
     done
 
     if ! python -c "import requests" >/dev/null 2>&1; then
+        say "[*] Menginstall Python requests..." "[*] Installing Python requests..."
         pip install requests >/dev/null 2>&1 || pip install requests
     fi
     return 0
@@ -74,7 +97,7 @@ ensure_deps() {
 
 check_root() {
     if ! su -c "id" >/dev/null 2>&1; then
-        echo "[!] Root access denied"
+        say "[!] Akses root ditolak" "[!] Root access denied"
         return 1
     fi
     return 0
@@ -108,13 +131,13 @@ clear_cache_and_kill_targets() {
     cd "$REPO_DIR" || return 1
     targets="$(python config_wizard.py --mode get-target-packages --lang "$LANG_CHOICE")"
     if [ -z "$targets" ]; then
-        echo "[!] No target package configured/detected."
+        say "[!] Tidak ada package target yang terkonfigurasi/terdeteksi." "[!] No target package configured/detected."
         return 0
     fi
 
     echo "$targets" | while IFS= read -r pkg; do
         [ -z "$pkg" ] && continue
-        echo "[*] Cleaning: $pkg"
+        printf "[*] %s: %s\n" "$(t "Membersihkan" "Cleaning")" "$pkg"
         su -c "am force-stop $pkg" >/dev/null 2>&1
         su -c "rm -rf /data/data/$pkg/cache/* /data/data/$pkg/code_cache/* 2>/dev/null"
     done
@@ -137,32 +160,36 @@ cd "$REPO_DIR"
 ./start.sh --autorun
 EOF
     chmod +x "$BOOT_DIR/roblox-monitor.sh"
-    echo "[v] Boot script created at $BOOT_DIR/roblox-monitor.sh"
-    echo "[i] Install Termux:Boot app (F-Droid) and allow auto-start permission."
+    say "[v] Boot script dibuat di $BOOT_DIR/roblox-monitor.sh" "[v] Boot script created at $BOOT_DIR/roblox-monitor.sh"
+    say "[i] Install aplikasi Termux:Boot (F-Droid) dan beri izin auto-start." "[i] Install Termux:Boot app (F-Droid) and allow auto-start permission."
 }
 
 remove_boot_autorun() {
     rm -f "$HOME/.termux/boot/roblox-monitor.sh"
-    echo "[v] Boot script removed."
+    say "[v] Boot script dihapus." "[v] Boot script removed."
 }
 
 misc_menu() {
     while true; do
+        print_header
         echo "------------------------------------------"
-        echo "Misc"
-        echo "1. Setup auto exec after reboot"
-        echo "2. Disable auto exec after reboot"
-        echo "3. Update repo (git pull)"
-        echo "0. Back"
-        printf "> "
+        echo "$(t "Misc" "Misc")"
+        echo "1. $(t "Setup auto jalan setelah reboot" "Setup auto exec after reboot")"
+        echo "2. $(t "Nonaktifkan auto jalan setelah reboot" "Disable auto exec after reboot")"
+        echo "3. $(t "Update repo (git pull)" "Update repo (git pull)")"
+        echo "0. $(t "Kembali" "Back")"
+        printf "Choice : "
         read -r c
         case "$c" in
             1) setup_boot_autorun ;;
             2) remove_boot_autorun ;;
             3) cd "$REPO_DIR" && git pull ;;
             0) break ;;
-            *) echo "Invalid choice" ;;
+            *) say "Pilihan tidak valid" "Invalid choice" ;;
         esac
+        echo
+        say "Tekan Enter..." "Press Enter..."
+        read -r _
     done
 }
 
@@ -190,7 +217,7 @@ main_menu() {
             3) run_monitor ;;
             4) misc_menu ;;
             0) exit 0 ;;
-            *) echo "Invalid choice" ;;
+            *) say "Pilihan tidak valid" "Invalid choice" ;;
         esac
         echo
         if [ "$LANG_CHOICE" = "en" ]; then
@@ -202,14 +229,18 @@ main_menu() {
     done
 }
 
-print_header
-ensure_repo || { echo "[!] Failed to prepare repository."; exit 1; }
-ensure_deps || { echo "[!] Failed to install dependencies."; exit 1; }
-
 if [ "$AUTO_RUN" -eq 1 ]; then
+    load_saved_language
+    print_header
+    ensure_repo || { say "[!] Gagal menyiapkan repository." "[!] Failed to prepare repository."; exit 1; }
+    load_saved_language
+    ensure_deps || { say "[!] Gagal menginstall dependencies." "[!] Failed to install dependencies."; exit 1; }
     run_monitor
     exit $?
 fi
 
 pick_language
+print_header
+ensure_repo || { say "[!] Gagal menyiapkan repository." "[!] Failed to prepare repository."; exit 1; }
+ensure_deps || { say "[!] Gagal menginstall dependencies." "[!] Failed to install dependencies."; exit 1; }
 main_menu
