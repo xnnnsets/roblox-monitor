@@ -42,6 +42,12 @@ RED   = "\033[91m"
 CYAN  = "\033[96m"
 RESET = "\033[0m"
 
+AM_START_FEATURES = {
+    "checked": False,
+    "windowing_mode": False,
+    "launch_bounds": False,
+}
+
 def send_discord(msg):
     if WEBHOOK:
         try: requests.post(WEBHOOK, json={"content": msg}, timeout=5)
@@ -327,6 +333,39 @@ def run_su(command, timeout=8):
     except Exception as e:
         return 1, str(e)
 
+
+def detect_am_start_features():
+    if AM_START_FEATURES["checked"]:
+        return
+    AM_START_FEATURES["checked"] = True
+    code, help_text = run_su("am start --help 2>/dev/null", timeout=4)
+    if code != 0 or not help_text.strip():
+        _, help_text = run_su("am start -h 2>/dev/null", timeout=4)
+    lower = (help_text or "").lower()
+    AM_START_FEATURES["windowing_mode"] = "--windowingmode" in lower
+    AM_START_FEATURES["launch_bounds"] = "--activity-launch-bounds" in lower
+
+
+def extract_task_id_from_text(text):
+    if not text:
+        return None
+    patterns = [
+        r"taskId=(\d+)",
+        r"Task\{[^#\n]*#(\d+)",
+        r"\bt(\d{1,5})\b",
+        r"\bid=(\d{1,5})\b",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            try:
+                value = int(m.group(1))
+                if value > 0:
+                    return value
+            except Exception:
+                pass
+    return None
+
 def get_screen_size():
     code, output = run_su("wm size 2>/dev/null")
     if code == 0:
@@ -338,27 +377,33 @@ def get_screen_size():
     return 1080, 2400
 
 def find_task_id(package):
-    pkg = re.escape(package)
+    pkg = package
     commands = [
         "dumpsys activity activities 2>/dev/null",
         "dumpsys activity recents 2>/dev/null",
         "cmd activity tasks 2>/dev/null",
         "am task list 2>/dev/null",
     ]
-    regexes = [
-        rf"taskId=(\d+)[^\n]*{pkg}",
-        rf"Task\{{[^\n]*#(\d+)[^\n]*A={pkg}",
-        rf"\bid=(\d+)\b[^\n]*{pkg}",
-    ]
 
     for cmd in commands:
         _, output = run_su(cmd, timeout=6)
         if not output:
             continue
-        for rx in regexes:
-            m = re.search(rx, output, re.IGNORECASE)
-            if m:
-                return int(m.group(1))
+
+        lines = output.splitlines()
+        candidates = []
+        for idx, line in enumerate(lines):
+            if pkg not in line:
+                continue
+            start = max(0, idx - 3)
+            end = min(len(lines), idx + 4)
+            context = "\n".join(lines[start:end])
+            task_id = extract_task_id_from_text(context)
+            if task_id is not None:
+                candidates.append(task_id)
+
+        if candidates:
+            return max(candidates)
     return None
 
 
@@ -476,7 +521,7 @@ def get_grid_bounds(index, total, width, height):
 
     return clamp_bounds(left, top, right, bottom, width, height, top_offset=top_offset)
 
-def apply_float_grid(package, grid_index, grid_total):
+def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
     if not AUTO_FLOAT_GRID:
         return
 
@@ -494,8 +539,10 @@ def apply_float_grid(package, grid_index, grid_total):
         time.sleep(0.35)
 
     time.sleep(FLOAT_START_DELAY)
-    task_id = None
+    task_id = task_id_hint
     for _ in range(4):
+        if task_id is not None:
+            break
         task_id = find_task_id(package)
         if task_id is not None:
             break
@@ -538,6 +585,8 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
         width, height = get_screen_size()
         left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
         launch_bounds = f"{left},{top},{right},{bottom}"
+
+    detect_am_start_features()
     
     launched = False
     
@@ -556,12 +605,14 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
     ]:
         if act and act not in activities_to_try and 'splash' not in act.lower():
             activities_to_try.append(act)
+
+    launched_task_id = None
     
     for activity in activities_to_try:
         print(f"[*] Trying: -n {package}/{activity}")
         start_commands = []
-        if AUTO_FLOAT_GRID:
-            if launch_bounds:
+        if AUTO_FLOAT_GRID and AM_START_FEATURES["windowing_mode"]:
+            if launch_bounds and AM_START_FEATURES["launch_bounds"]:
                 start_commands.append(
                     f"am start --windowingMode 5 --activity-launch-bounds {launch_bounds} -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
                 )
@@ -574,19 +625,21 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
 
         for start_cmd in start_commands:
             code, out = run_su(start_cmd, timeout=6)
-            print(f"    {out[:100]}")
             if code == 0 and 'error' not in out.lower() and 'unknown option' not in out.lower():
+                launched_task_id = extract_task_id_from_text(out)
                 print(f"[✓] Launched via {activity}")
                 launched = True
                 break
         if launched:
+            if launched_task_id is not None:
+                print(f"[*] taskId detected: {launched_task_id}")
             break
     
     if not launched:
         print("[!] All explicit failed, fallback implicit...")
         run_su(f"am start -a android.intent.action.VIEW -d '{link}'", timeout=6)
 
-    apply_float_grid(package, grid_index, grid_total)
+    apply_float_grid(package, grid_index, grid_total, task_id_hint=launched_task_id)
 
 def display_dashboard(packages_info, memory_info, check_count):
     """Compact dashboard for narrow Termux screens (no wide table wrapping)."""
