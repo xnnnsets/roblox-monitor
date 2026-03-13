@@ -4,6 +4,8 @@ import time
 import json
 import subprocess
 import math
+import shutil
+import signal
 from datetime import datetime, timedelta
 import requests
 import sys
@@ -154,24 +156,14 @@ def get_activity_name(package):
     return f"{package}.ActivityNativeMain"
 
 def get_roblox_username(package):
-    """Scan all app data files then logcat for the Roblox username."""
-    # Method 1: search all JSON/XML files in app data directory
-    raw = os.popen(
-        f'su -c "find /data/data/{package} -type f \\( -name \'*.json\' -o -name \'*.xml\' \\) 2>/dev/null'
-        f' | xargs grep -hi \'username\' 2>/dev/null | head -30"'
-    ).read()
-    for pattern in [
-        r'"[Uu]ser[Nn]ame"\s*:\s*"([A-Za-z0-9_]{3,20})"',
-        r'name="[Uu]ser[Nn]ame"[^>]*>([A-Za-z0-9_]{3,20})<',
-        r'[Uu]ser[Nn]ame["\s]*[:=>]+["\s]*([A-Za-z0-9_]{3,20})',
-    ]:
-        m = re.search(pattern, raw)
-        if m and m.group(1).lower() not in ('null', 'true', 'false', 'string'):
-            return m.group(1)
-    # Method 2: logcat — Roblox logs username on login
-    logcat = os.popen(
-        f'su -c "logcat -d -t 500 2>/dev/null | grep -Ei \'username|playername\' | tail -20"'
-    ).read()
+    """Fast username detection via recent logcat only (avoid heavy root file scan)."""
+    safe_pkg = re.escape(package)
+    code, logcat = run_su(
+        f"logcat -d -t 220 2>/dev/null | grep -Ei 'username|playername|{safe_pkg}' | tail -40",
+        timeout=3,
+    )
+    if code != 0:
+        return "unknown"
     for pattern in [
         r'"[Uu]ser[Nn]ame"\s*[=:]\s*"([A-Za-z0-9_]{3,20})"',
         r'[Uu]ser[Nn]ame["\s=:]+([A-Za-z0-9_]{3,20})',
@@ -232,11 +224,14 @@ def get_memory_info():
 def read_recent_roblox_logs():
     """Return recent Roblox-focused logcat lines so disconnect logs are not buried by system noise."""
     cmd = (
-        f"su -c \"logcat -d -t {LOG_SCAN_LINES} 2>/dev/null"
+        f"logcat -d -t {LOG_SCAN_LINES} 2>/dev/null"
         f" | grep -Ei 'Roblox  :|rbx\\.|com\\.roblox\\.client'"
-        f" | tail -250\""
+        f" | tail -250"
     )
-    return os.popen(cmd).read()
+    code, output = run_su(cmd, timeout=5)
+    if code != 0:
+        return ""
+    return output
 
 
 def check_game_status():
@@ -263,18 +258,22 @@ def check_game_status():
     return False, None
 
 def is_package_running(package):
-    pid = os.popen(f'su -c "pidof {package}" 2>/dev/null').read().strip()
+    code, output = run_su(f"pidof {package} 2>/dev/null", timeout=3)
+    pid = output.strip() if code == 0 else ""
     return pid, bool(pid)
 
 def get_last_roblox_log_time(package):
     """Return timestamp of last Roblox log output, or None if no recent logs."""
     # Get recent Roblox logs with timestamp
     cmd = (
-        f"su -c \"logcat -d -t {LOG_SCAN_LINES} 2>/dev/null"
+        f"logcat -d -t {LOG_SCAN_LINES} 2>/dev/null"
         f" | grep -Ei 'Roblox  :|rbx\\.|{package}'"
-        f" | tail -20\""
+        f" | tail -20"
     )
-    logs = os.popen(cmd).read().strip().split('\n')
+    code, output = run_su(cmd, timeout=5)
+    if code != 0:
+        return None
+    logs = output.strip().split('\n')
     if not logs or not logs[0]:
         return None
     # Extract timestamp dari baris terakhir (format: MM-DD HH:MM:SS.mmm)
@@ -340,20 +339,24 @@ def get_screen_size():
 
 def find_task_id(package):
     commands = [
+        f"am task list 2>/dev/null | grep -Ei '{package}|task' | head -3",
+        f"cmd activity tasks 2>/dev/null | grep -Ei '{package}|task' | head -3",
         f"dumpsys activity activities 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
         f"dumpsys activity recents 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
         f"am stack list 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
     ]
     for cmd in commands:
         _, output = run_su(cmd)
-        m = re.search(r"taskId=(\d+)", output)
-        if m:
-            return int(m.group(1))
+        patterns = [r"taskId=(\d+)", r"\bid=(\d+)\b", r"Task\s*(?:id\s*)?#?(\d+)"]
+        for pattern in patterns:
+            m = re.search(pattern, output, re.IGNORECASE)
+            if m:
+                return int(m.group(1))
     return None
 
 
 def clamp_bounds(left, top, right, bottom, width, height, top_offset=0):
-    safe = max(6, min(width, height) // 120)
+    safe = max(14, min(width, height) // 35)
     min_w = max(78, width // 10)
     min_h = max(96, height // 10)
 
@@ -374,7 +377,7 @@ def clamp_bounds(left, top, right, bottom, width, height, top_offset=0):
 
 def get_grid_bounds(index, total, width, height):
     total = max(1, total)
-    gap = 10
+    gap = max(8, min(width, height) // 110)
     top_offset = 58
     bottom_margin = 12
     if FLOAT_ORIENTATION_MODE == "landscape":
@@ -484,7 +487,12 @@ def apply_float_grid(package, grid_index, grid_total):
         time.sleep(0.35)
 
     time.sleep(FLOAT_START_DELAY)
-    task_id = find_task_id(package)
+    task_id = None
+    for _ in range(4):
+        task_id = find_task_id(package)
+        if task_id is not None:
+            break
+        time.sleep(0.7)
     if task_id is None:
         print(f"[!] Float skip: task id tidak ditemukan untuk {package}")
         return
@@ -495,6 +503,7 @@ def apply_float_grid(package, grid_index, grid_total):
     float_commands = [
         f"cmd activity task set-windowing-mode {task_id} 5",
         f"am stack move-task {task_id} 2 true",
+        f"cmd activity move-task {task_id} 2 true",
         f"am task resize {task_id} {left} {top} {right} {bottom}",
         f"cmd activity task resize {task_id} {left} {top} {right} {bottom}",
         f"am stack resize 2 {left} {top} {right} {bottom}",
@@ -565,31 +574,40 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
 def display_dashboard(packages_info, memory_info, check_count):
     """Render a bordered table: PACKAGE (username) | STATUS, plus a memory row."""
     total, free, pct = memory_info
-    col1 = 42
-    col2 = 18
+
+    term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+    table_width = max(40, min(110, term_cols - 2))
+    col2 = max(12, min(20, table_width // 3))
+    col1 = max(22, table_width - col2)
     sep  = f"+{'-' * col1}+{'-' * col2}+"
+
+    def fit_text(text, width):
+        text = str(text)
+        if width <= 1:
+            return text[:width]
+        return text if len(text) <= width else text[: width - 1] + "…"
 
     os.system('clear')
     print(sep)
-    header_pkg = f" {'PACKAGE':<{col1 - 2}} "
-    header_st  = f" {'STATUS':<{col2 - 2}} "
+    header_pkg = f" {fit_text('PACKAGE', col1 - 2):<{col1 - 2}} "
+    header_st  = f" {fit_text('STATUS', col2 - 2):<{col2 - 2}} "
     print(f"|{CYAN}{header_pkg}{RESET}|{CYAN}{header_st}{RESET}|")
     print(sep)
 
     for pkg, username, running in packages_info:
-        label       = f"{pkg} ({username})"
+        label       = fit_text(f"{pkg} ({username})", col1 - 2)
         status_text = "Online" if running else "Offline"
         status_col  = GREEN if running else RED
         # Build padded fields (colour codes are zero-width for alignment purposes)
         pkg_field = f" {label:<{col1 - 2}} "
-        st_field  = f" {status_text:<{col2 - 2}} "
+        st_field  = f" {fit_text(status_text, col2 - 2):<{col2 - 2}} "
         print(f"|{pkg_field}|{status_col}{st_field}{RESET}|")
 
     # Memory row
     print(sep)
-    mem_label  = " System Memory"
+    mem_label  = fit_text(" System Memory", col1)
     n          = len(packages_info)
-    mem_status = f"Checking [{check_count}/{n}] Free: {free}MB ({pct}%)"
+    mem_status = fit_text(f"Checking [{check_count}/{n}] Free: {free}MB ({pct}%)", col2 - 2)
     print(f"|{CYAN}{mem_label:<{col1}}{RESET}| {mem_status:<{col2 - 2}} |")
     print(sep)
 
@@ -740,4 +758,11 @@ def monitor():
         time.sleep(INTERVAL)
 
 if __name__ == "__main__":
-    monitor()
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    if hasattr(signal, "SIGTSTP"):
+        signal.signal(signal.SIGTSTP, signal.default_int_handler)
+    try:
+        monitor()
+    except KeyboardInterrupt:
+        print("\n[!] Monitor dihentikan user (Ctrl+C).")
+        sys.exit(0)

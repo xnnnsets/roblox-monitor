@@ -13,9 +13,34 @@ fi
 
 LANG_CHOICE="id"
 AUTO_RUN=0
-if [ "$1" = "--autorun" ]; then
-    AUTO_RUN=1
-fi
+SKIP_LANG_PICK=0
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --autorun)
+            AUTO_RUN=1
+            ;;
+        --lang)
+            shift
+            case "$1" in
+                en|id)
+                    LANG_CHOICE="$1"
+                    SKIP_LANG_PICK=1
+                    ;;
+            esac
+            ;;
+        --lang=*)
+            lang_val="${1#--lang=}"
+            case "$lang_val" in
+                en|id)
+                    LANG_CHOICE="$lang_val"
+                    SKIP_LANG_PICK=1
+                    ;;
+            esac
+            ;;
+    esac
+    shift
+done
 
 t() {
     if [ "$LANG_CHOICE" = "en" ]; then
@@ -262,7 +287,9 @@ if [ "$AUTO_RUN" -eq 1 ]; then
     exit $?
 fi
 
-pick_language
+if [ "$SKIP_LANG_PICK" -eq 0 ]; then
+    pick_language
+fi
 print_header
 ensure_repo || { say "[!] Gagal menyiapkan repository." "[!] Failed to prepare repository."; exit 1; }
 
@@ -271,7 +298,7 @@ ensure_repo || { say "[!] Gagal menyiapkan repository." "[!] Failed to prepare r
 if [ "$SCRIPT_DIR" != "$REPO_DIR" ] && [ -x "$REPO_DIR/start.sh" ]; then
     say "[v] Meneruskan ke versi terbaru di repo..." "[v] Handing off to latest version in repo..."
     say "[i] Untuk selanjutnya jalankan: $REPO_DIR/start.sh" "[i] Next time run directly: $REPO_DIR/start.sh"
-    exec "$REPO_DIR/start.sh"
+    exec "$REPO_DIR/start.sh" --lang "$LANG_CHOICE"
 fi
 
 ensure_deps || { say "[!] Gagal menginstall dependencies." "[!] Failed to install dependencies."; exit 1; }
