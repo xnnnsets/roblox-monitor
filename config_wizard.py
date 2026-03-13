@@ -29,6 +29,10 @@ DEFAULT_CONFIG = {
     "grid_layout_preset": "balanced",
 }
 
+_USERNAME_CACHE = {}
+_ROOT_ACCESS_CHECKED = False
+_HAS_ROOT_ACCESS = False
+
 
 def tr(lang: str, id_text: str, en_text: str) -> str:
     return id_text if lang == "id" else en_text
@@ -95,37 +99,49 @@ def parse_server_code(raw: str) -> str:
     return text
 
 
+def has_root_access_quick() -> bool:
+    global _ROOT_ACCESS_CHECKED, _HAS_ROOT_ACCESS
+    if _ROOT_ACCESS_CHECKED:
+        return _HAS_ROOT_ACCESS
+    _ROOT_ACCESS_CHECKED = True
+    try:
+        result = subprocess.run(["su", "-c", "id"], capture_output=True, text=True, timeout=2)
+        output = (result.stdout or "") + (result.stderr or "")
+        _HAS_ROOT_ACCESS = result.returncode == 0 and "uid=0" in output
+    except Exception:
+        _HAS_ROOT_ACCESS = False
+    return _HAS_ROOT_ACCESS
+
+
 def detect_package_username(package: str) -> str:
+    cached = _USERNAME_CACHE.get(package)
+    if cached:
+        return cached
+
+    if not has_root_access_quick():
+        _USERNAME_CACHE[package] = "unknown"
+        return "unknown"
+
     patterns = [
         r'"[Uu]ser[Nn]ame"\s*[:=]\s*"([A-Za-z0-9_]{3,20})"',
         r'[Uu]ser[Nn]ame["\s=:]+([A-Za-z0-9_]{3,20})',
     ]
 
-    raw = ""
-    try:
-        cmd = (
-            f"find /data/data/{package} -type f \\( -name '*.json' -o -name '*.xml' \\) 2>/dev/null"
-            f" | xargs grep -hi 'username' 2>/dev/null | head -20"
-        )
-        raw = subprocess.run(["su", "-c", cmd], capture_output=True, text=True, timeout=8).stdout
-    except Exception:
-        raw = ""
-    for pattern in patterns:
-        m = re.search(pattern, raw)
-        if m and m.group(1).lower() not in ("null", "true", "false", "string"):
-            return m.group(1)
-
     logs = ""
     try:
-        cmd = f"logcat -d -t 400 2>/dev/null | grep -Ei 'username|playername|{package}' | tail -30"
-        logs = subprocess.run(["su", "-c", cmd], capture_output=True, text=True, timeout=8).stdout
+        safe_pkg = re.escape(package)
+        cmd = f"logcat -d -t 120 2>/dev/null | grep -Ei 'username|playername|{safe_pkg}' | tail -20"
+        logs = subprocess.run(["su", "-c", cmd], capture_output=True, text=True, timeout=2).stdout
     except Exception:
         logs = ""
+
     for pattern in patterns:
         m = re.search(pattern, logs)
         if m and m.group(1).lower() not in ("null", "true", "false", "string"):
+            _USERNAME_CACHE[package] = m.group(1)
             return m.group(1)
 
+    _USERNAME_CACHE[package] = "unknown"
     return "unknown"
 
 
@@ -263,9 +279,16 @@ def configure_server_settings(config: dict, lang: str, available: List[str]) -> 
     if not available:
         print(tr(lang, "Tidak ada package, gunakan server code global.", "No packages available, using global server code."))
     else:
+        show_username = len(available) <= 4 and has_root_access_quick()
+        if not show_username:
+            print(tr(
+                lang,
+                "Label username dimatikan agar input tetap cepat.",
+                "Username labels are disabled to keep input responsive.",
+            ))
         print(tr(lang, "Isi server code per package (kosong = pakai global)", "Set per-package server code (blank = use global)"))
         for pkg in available:
-            pkg_label = get_package_label(pkg)
+            pkg_label = get_package_label(pkg) if show_username else pkg
             value = prompt(
                 lang,
                 f"{pkg_label} server link/code",
