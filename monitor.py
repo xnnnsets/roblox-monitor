@@ -338,18 +338,25 @@ def get_screen_size():
     return 1080, 2400
 
 def find_task_id(package):
+    pkg = re.escape(package)
     commands = [
-        f"am task list 2>/dev/null | grep -Ei '{package}|task' | head -3",
-        f"cmd activity tasks 2>/dev/null | grep -Ei '{package}|task' | head -3",
-        f"dumpsys activity activities 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
-        f"dumpsys activity recents 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
-        f"am stack list 2>/dev/null | grep -E 'taskId=[0-9]+.*{package}/' | head -1",
+        "dumpsys activity activities 2>/dev/null",
+        "dumpsys activity recents 2>/dev/null",
+        "cmd activity tasks 2>/dev/null",
+        "am task list 2>/dev/null",
     ]
+    regexes = [
+        rf"taskId=(\d+)[^\n]*{pkg}",
+        rf"Task\{{[^\n]*#(\d+)[^\n]*A={pkg}",
+        rf"\bid=(\d+)\b[^\n]*{pkg}",
+    ]
+
     for cmd in commands:
-        _, output = run_su(cmd)
-        patterns = [r"taskId=(\d+)", r"\bid=(\d+)\b", r"Task\s*(?:id\s*)?#?(\d+)"]
-        for pattern in patterns:
-            m = re.search(pattern, output, re.IGNORECASE)
+        _, output = run_su(cmd, timeout=6)
+        if not output:
+            continue
+        for rx in regexes:
+            m = re.search(rx, output, re.IGNORECASE)
             if m:
                 return int(m.group(1))
     return None
@@ -470,7 +477,7 @@ def get_grid_bounds(index, total, width, height):
     return clamp_bounds(left, top, right, bottom, width, height, top_offset=top_offset)
 
 def apply_float_grid(package, grid_index, grid_total):
-    if not AUTO_FLOAT_GRID or grid_total <= 1:
+    if not AUTO_FLOAT_GRID:
         return
 
     run_su("settings put global enable_freeform_support 1")
@@ -525,6 +532,12 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
     link = f"roblox://navigation/share_links?code={package_code}&type=Server"
     print(f"[+] Joining: {link}")
     print(f"[+] Package: {package}")
+
+    launch_bounds = ""
+    if AUTO_FLOAT_GRID:
+        width, height = get_screen_size()
+        left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
+        launch_bounds = f"{left},{top},{right},{bottom}"
     
     launched = False
     
@@ -548,6 +561,10 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
         print(f"[*] Trying: -n {package}/{activity}")
         start_commands = []
         if AUTO_FLOAT_GRID:
+            if launch_bounds:
+                start_commands.append(
+                    f"am start --windowingMode 5 --activity-launch-bounds {launch_bounds} -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
+                )
             start_commands.append(
                 f"am start --windowingMode 5 -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
             )
@@ -572,14 +589,9 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
     apply_float_grid(package, grid_index, grid_total)
 
 def display_dashboard(packages_info, memory_info, check_count):
-    """Render a bordered table: PACKAGE (username) | STATUS, plus a memory row."""
+    """Compact dashboard for narrow Termux screens (no wide table wrapping)."""
     total, free, pct = memory_info
-
     term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
-    table_width = max(40, min(110, term_cols - 2))
-    col2 = max(12, min(20, table_width // 3))
-    col1 = max(22, table_width - col2)
-    sep  = f"+{'-' * col1}+{'-' * col2}+"
 
     def fit_text(text, width):
         text = str(text)
@@ -588,28 +600,37 @@ def display_dashboard(packages_info, memory_info, check_count):
         return text if len(text) <= width else text[: width - 1] + "…"
 
     os.system('clear')
-    print(sep)
-    header_pkg = f" {fit_text('PACKAGE', col1 - 2):<{col1 - 2}} "
-    header_st  = f" {fit_text('STATUS', col2 - 2):<{col2 - 2}} "
-    print(f"|{CYAN}{header_pkg}{RESET}|{CYAN}{header_st}{RESET}|")
-    print(sep)
+    print("=" * min(52, term_cols))
+    print(" ROBLOX MONITOR")
+    print("=" * min(52, term_cols))
 
-    for pkg, username, running in packages_info:
-        label       = fit_text(f"{pkg} ({username})", col1 - 2)
+    n = len(packages_info)
+    max_line = max(28, term_cols - 2)
+    for idx, (pkg, username, running) in enumerate(packages_info, start=1):
+        label = fit_text(f"{pkg} ({username})", max_line - 14)
         status_text = "Online" if running else "Offline"
-        status_col  = GREEN if running else RED
-        # Build padded fields (colour codes are zero-width for alignment purposes)
-        pkg_field = f" {label:<{col1 - 2}} "
-        st_field  = f" {fit_text(status_text, col2 - 2):<{col2 - 2}} "
-        print(f"|{pkg_field}|{status_col}{st_field}{RESET}|")
+        status_col = GREEN if running else RED
+        print(f"{idx}. {label} -> {status_col}{status_text}{RESET}")
 
-    # Memory row
-    print(sep)
-    mem_label  = fit_text(" System Memory", col1)
-    n          = len(packages_info)
-    mem_status = fit_text(f"Checking [{check_count}/{n}] Free: {free}MB ({pct}%)", col2 - 2)
-    print(f"|{CYAN}{mem_label:<{col1}}{RESET}| {mem_status:<{col2 - 2}} |")
-    print(sep)
+    print("-" * min(52, term_cols))
+    print(f"System Memory: Checking [{check_count}/{max(1, n)}] Free: {free}MB ({pct}%)")
+    print("=" * min(52, term_cols))
+
+
+def apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_total):
+    if not AUTO_FLOAT_GRID:
+        return
+    any_running = False
+    for pkg in target_packages:
+        _, running = is_package_running(pkg)
+        if not running:
+            continue
+        any_running = True
+        print(f"[*] Apply float startup: {pkg}")
+        apply_float_grid(pkg, grid_index_map[pkg], grid_total)
+        time.sleep(0.4)
+    if any_running:
+        print("[v] Float startup sync selesai.")
 
 def monitor():
     os.system('clear')
@@ -693,6 +714,10 @@ def monitor():
     pkg_state = {pkg: {'join_time': datetime.now(), 'last_activity': datetime.now()} for pkg in target_packages}
     grid_index_map = {pkg: idx for idx, pkg in enumerate(target_packages)}
     grid_total = len(target_packages)
+
+    # Pastikan app yang sudah running juga otomatis di-float (tanpa nunggu crash/rejoin).
+    apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_total)
+
     check_count = 0
     while True:
         check_count = (check_count % len(target_packages)) + 1
