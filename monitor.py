@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 import requests
 import sys
 
+STOP_FILE = os.path.expanduser("~/.roblox-monitor.stop")
+
 # Load Config
 try:
     with open("config.json") as f:
@@ -341,6 +343,35 @@ def run_su(command, timeout=8):
         return 1, str(e)
 
 
+def enable_freeform_compat_settings():
+    """Best-effort compatibility toggles for freeform on mixed ROMs/cloud devices."""
+    commands = [
+        "settings put global enable_freeform_support 1",
+        "settings put global force_resizable_activities 1",
+        "settings put global enable_non_resizable_multi_window 1",
+        "settings put global development_settings_enabled 1",
+        "settings put global freeform_window_management 1",
+        "settings put secure freeform_window_management 1",
+        "setprop persist.sys.fflag.override.settings_enable_freeform_support true",
+        "setprop persist.sys.debug.multi_window true",
+        "setprop persist.sys.freeform_window 1",
+    ]
+    for cmd in commands:
+        run_su(cmd, timeout=4)
+
+
+def should_stop_monitor():
+    return os.path.exists(STOP_FILE)
+
+
+def clear_stop_file():
+    try:
+        if os.path.exists(STOP_FILE):
+            os.remove(STOP_FILE)
+    except OSError:
+        pass
+
+
 def get_device_profile():
     if DEVICE_PROFILE["checked"]:
         return DEVICE_PROFILE
@@ -502,6 +533,7 @@ def try_apply_float_commands(task_id, left, top, right, bottom):
         f"cmd activity move-task {task_id} 2 true",
         # Resize to target bounds
         f"am task resize {task_id} {left} {top} {right} {bottom}",
+        f"cmd activity task set-bounds {task_id} {left} {top} {right} {bottom}",
         f"cmd activity task resize {task_id} {left} {top} {right} {bottom}",
         f"am stack resize 2 {left} {top} {right} {bottom}",
     ]
@@ -648,12 +680,7 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
     if not AUTO_FLOAT_GRID:
         return
 
-    run_su("settings put global enable_freeform_support 1")
-    run_su("settings put global force_resizable_activities 1")
-    run_su("settings put global enable_non_resizable_multi_window 1")
-    run_su("settings put global development_settings_enabled 1")
-    run_su("settings put global freeform_window_management 1")
-    run_su("settings put secure freeform_window_management 1")
+    enable_freeform_compat_settings()
 
     # Paksa orientasi dulu, lalu baru hitung ukuran layar agar koordinat akurat.
     if FLOAT_ORIENTATION_MODE == "landscape":
@@ -845,6 +872,7 @@ def apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_to
         print("[v] Float startup sync selesai.")
 
 def monitor():
+    clear_stop_file()
     os.system('clear')
     print("==========================================")
     print("   ROBLOX LOG-HUNTER (STABLE ROOT)")
@@ -854,6 +882,12 @@ def monitor():
         print("\n[!!!] ERROR: PYTHON GAGAL MENGAKSES ROOT [!!!]")
         print("Cek kembali izin Termux di aplikasi Superuser lu.")
         sys.exit(1)
+
+    profile = get_device_profile()
+    if profile["redfinger"]:
+        print(f"[i] Redfinger/virtual mode terdeteksi: {profile['name'] or 'unknown'}")
+        print(f"[i] Jika Ctrl+C/Z tidak bekerja, hentikan via: touch {STOP_FILE}")
+        enable_freeform_compat_settings()
 
     print("[v] Mendeteksi paket Roblox yang terinstall...")
     installed_packages = find_roblox_packages()
@@ -932,6 +966,11 @@ def monitor():
 
     check_count = 0
     while True:
+        if should_stop_monitor():
+            clear_stop_file()
+            print("\n[!] Monitor dihentikan via stop file.")
+            os._exit(0)
+
         check_count = (check_count % len(target_packages)) + 1
         is_error, reason = check_game_status()
 
@@ -1001,6 +1040,8 @@ if __name__ == "__main__":
         os._exit(0)
 
     signal.signal(signal.SIGINT, _hard_exit)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _hard_exit)
     if hasattr(signal, "SIGTSTP"):
         signal.signal(signal.SIGTSTP, _hard_exit)
     try:
