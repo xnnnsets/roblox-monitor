@@ -31,13 +31,18 @@ MANUAL_PACKAGES = config.get("manual_packages", [])
 MONITOR_SELECTION = str(config.get("monitor_selection", "")).lower()
 SELECTED_PACKAGES = config.get("selected_packages", [])
 AFK_TIMEOUT_MIN = float(config.get("afk_timeout_minutes", 20))
-LOG_SCAN_LINES = int(config.get("log_scan_lines", 4000))
+LOG_SCAN_LINES = max(200, min(int(config.get("log_scan_lines", 4000)), 1500))
 AUTO_FLOAT = bool(config.get("auto_float", config.get("auto_float_grid", True)))
 AUTO_GRID = bool(config.get("auto_grid", config.get("auto_float_grid", True)))
 FLOAT_START_DELAY = int(config.get("float_start_delay_seconds", 3))
 MULTI_LAUNCH_DELAY = int(config.get("multi_launch_delay_seconds", 30))
 FLOAT_ORIENTATION_MODE = str(config.get("float_orientation_mode", "system")).lower()
 GRID_LAYOUT_PRESET = str(config.get("grid_layout_preset", "balanced")).lower()
+MONITOR_SAMPLE_RATE_MS = int(os.getenv("MONITOR_SAMPLE_RATE_MS", str(config.get("monitor_sample_rate_ms", 100))))
+MONITOR_SAMPLE_RATE = max(0.05, min(1.0, MONITOR_SAMPLE_RATE_MS / 1000.0))
+STATUS_POLL_INTERVAL = max(MONITOR_SAMPLE_RATE, float(config.get("status_poll_interval_seconds", 0.3)))
+HEALTH_CHECK_INTERVAL = max(0.5, float(config.get("health_check_interval_seconds", INTERVAL)))
+LOG_CHECK_INTERVAL = max(0.5, float(config.get("log_check_interval_seconds", INTERVAL)))
 
 # ANSI color codes
 GREEN = "\033[92m"
@@ -989,22 +994,44 @@ def monitor():
     apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_total)
 
     check_count = 0
+    packages_info = [(pkg, usernames[pkg], False) for pkg in target_packages]
+    next_status_poll_at = 0.0
+    next_health_check_at = 0.0
+    next_log_check_at = 0.0
+
     while True:
         if should_stop_monitor():
             clear_stop_file()
             print("\n[!] Monitor dihentikan via stop file.")
             os._exit(0)
 
-        check_count = (check_count % len(target_packages)) + 1
-        is_error, reason = check_game_status()
+        now = time.monotonic()
+        run_health_cycle = False
 
-        packages_info = []
-        for pkg in target_packages:
-            pid, running = is_package_running(pkg)
-            packages_info.append((pkg, usernames[pkg], running))
+        if now >= next_log_check_at:
+            is_error, reason = check_game_status()
+            next_log_check_at = now + LOG_CHECK_INTERVAL
+        else:
+            is_error, reason = False, None
+
+        if now >= next_health_check_at:
+            check_count = (check_count % len(target_packages)) + 1
+            run_health_cycle = True
+            next_health_check_at = now + HEALTH_CHECK_INTERVAL
+
+        if now >= next_status_poll_at:
+            packages_info = []
+            for pkg in target_packages:
+                pid, running = is_package_running(pkg)
+                packages_info.append((pkg, usernames[pkg], running))
+            next_status_poll_at = now + STATUS_POLL_INTERVAL
 
         memory_info = get_memory_info()
         display_dashboard(packages_info, memory_info, check_count)
+
+        if not run_health_cycle:
+            time.sleep(MONITOR_SAMPLE_RATE)
+            continue
 
         # Handle crashed (not running) packages first
         crashed = set()
@@ -1055,7 +1082,7 @@ def monitor():
                     save_username_cache({pkg: usernames[pkg]})
                     break  # one reconnect per check cycle
 
-        time.sleep(INTERVAL)
+                time.sleep(MONITOR_SAMPLE_RATE)
 
 if __name__ == "__main__":
     def _hard_exit(signum, frame):

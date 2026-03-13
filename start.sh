@@ -196,7 +196,7 @@ run_monitor() {
     cd "$REPO_DIR" || return 1
     clear_cache_and_kill_targets
     command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock
-    python monitor.py
+    MONITOR_SAMPLE_RATE_MS=100 python monitor.py
 }
 
 setup_boot_autorun() {
