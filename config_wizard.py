@@ -22,7 +22,8 @@ DEFAULT_CONFIG = {
     "discord_webhook": "",
     "afk_timeout_minutes": 20,
     "clear_cache_mode": "target",
-    "auto_float_grid": True,
+    "auto_float": True,
+    "auto_grid": True,
     "float_start_delay_seconds": 3,
     "multi_launch_delay_seconds": 30,
     "float_orientation_mode": "system",
@@ -129,6 +130,10 @@ def load_config() -> dict:
         data = json.load(f)
     config = DEFAULT_CONFIG.copy()
     config.update(data)
+    if "auto_float" not in config:
+        config["auto_float"] = bool(config.get("auto_float_grid", True))
+    if "auto_grid" not in config:
+        config["auto_grid"] = bool(config.get("auto_float_grid", True))
     config["manual_packages"] = normalize_packages(config.get("manual_packages", []))
     config["selected_packages"] = normalize_packages(config.get("selected_packages", []))
     if not isinstance(config.get("server_code_by_package"), dict):
@@ -145,6 +150,10 @@ def save_config(config: dict) -> None:
         config["server_code_by_package"] = {}
     if not isinstance(config.get("package_usernames"), dict):
         config["package_usernames"] = {}
+    config["auto_float"] = bool(config.get("auto_float", True))
+    config["auto_grid"] = bool(config.get("auto_grid", True))
+    # legacy compatibility key
+    config["auto_float_grid"] = bool(config["auto_float"] and config["auto_grid"])
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
         f.write("\n")
@@ -382,8 +391,10 @@ def show_config_summary(config: dict, lang: str) -> bool:
         print(f"  fallback     : {fb_str}")
 
     print("\n" + tr(lang, "[ GRID FLOAT ]", "[ GRID FLOAT ]"))
-    af = config.get("auto_float_grid", True)
+    af = bool(config.get("auto_float", config.get("auto_float_grid", True)))
+    ag = bool(config.get("auto_grid", config.get("auto_float_grid", True)))
     print(f"  auto float   : {tr(lang, 'ya', 'yes') if af else tr(lang, 'tidak', 'no')}")
+    print(f"  auto grid    : {tr(lang, 'ya', 'yes') if ag else tr(lang, 'tidak', 'no')}")
     print(f"  orientasi    : {config.get('float_orientation_mode', 'system')}")
     print(f"  preset grid  : {config.get('grid_layout_preset', 'balanced')}")
     print(f"  start delay  : {config.get('float_start_delay_seconds', 3)}s")
@@ -616,11 +627,17 @@ def quick_setup(config: dict, lang: str) -> dict:
         "AFK timeout (minutes)",
         float(config.get("afk_timeout_minutes", 20)),
     )
-    config["auto_float_grid"] = prompt_bool(
+    config["auto_float"] = prompt_bool(
         lang,
-        "Auto float grid? (y/n)",
-        "Auto float grid? (y/n)",
-        bool(config.get("auto_float_grid", True)),
+        "Auto float/freeform? (y/n)",
+        "Auto float/freeform? (y/n)",
+        bool(config.get("auto_float", config.get("auto_float_grid", True))),
+    )
+    config["auto_grid"] = prompt_bool(
+        lang,
+        "Auto grid resize? (y/n)",
+        "Auto grid resize? (y/n)",
+        bool(config.get("auto_grid", config.get("auto_float_grid", True))),
     )
     config["float_start_delay_seconds"] = prompt_int(
         lang,
@@ -658,15 +675,16 @@ def edit_config(config: dict, lang: str) -> dict:
         print("5. " + tr(lang, "Discord webhook", "Discord webhook"))
         print("6. " + tr(lang, "Check interval", "Check interval"))
         print("7. " + tr(lang, "AFK timeout", "AFK timeout"))
-        print("8. " + tr(lang, "Auto float grid", "Auto float grid"))
-        print("9. " + tr(lang, "Float start delay", "Float start delay"))
-        print("10. " + tr(lang, "Jeda buka antar app", "Delay between app launches"))
-        print("11. " + tr(lang, "Orientasi float/grid", "Float/grid orientation"))
-        print("12. " + tr(lang, "Preset layout grid", "Grid layout preset"))
-        print("13. " + tr(lang, "Simpan dan keluar", "Save and exit"))
+        print("8. " + tr(lang, "Auto float/freeform", "Auto float/freeform"))
+        print("9. " + tr(lang, "Auto grid resize", "Auto grid resize"))
+        print("10. " + tr(lang, "Float start delay", "Float start delay"))
+        print("11. " + tr(lang, "Jeda buka antar app", "Delay between app launches"))
+        print("12. " + tr(lang, "Orientasi float/grid", "Float/grid orientation"))
+        print("13. " + tr(lang, "Preset layout grid", "Grid layout preset"))
+        print("14. " + tr(lang, "Simpan dan keluar", "Save and exit"))
         print("0. " + tr(lang, "Batal", "Cancel"))
 
-        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "0"], default="0")
+        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "0"], default="0")
         if choice == "1":
             available = resolve_source_packages(config)
             configure_server_settings(config, lang, available)
@@ -699,13 +717,20 @@ def edit_config(config: dict, lang: str) -> dict:
                 float(config.get("afk_timeout_minutes", 20)),
             )
         elif choice == "8":
-            config["auto_float_grid"] = prompt_bool(
+            config["auto_float"] = prompt_bool(
                 lang,
-                "Auto float grid? (y/n)",
-                "Auto float grid? (y/n)",
-                bool(config.get("auto_float_grid", True)),
+                "Auto float/freeform? (y/n)",
+                "Auto float/freeform? (y/n)",
+                bool(config.get("auto_float", config.get("auto_float_grid", True))),
             )
         elif choice == "9":
+            config["auto_grid"] = prompt_bool(
+                lang,
+                "Auto grid resize? (y/n)",
+                "Auto grid resize? (y/n)",
+                bool(config.get("auto_grid", config.get("auto_float_grid", True))),
+            )
+        elif choice == "10":
             config["float_start_delay_seconds"] = prompt_int(
                 lang,
                 "Float start delay (detik)",
@@ -713,7 +738,7 @@ def edit_config(config: dict, lang: str) -> dict:
                 int(config.get("float_start_delay_seconds", 3)),
                 0,
             )
-        elif choice == "10":
+        elif choice == "11":
             config["multi_launch_delay_seconds"] = prompt_int(
                 lang,
                 "Jeda buka antar app (detik)",
@@ -721,11 +746,11 @@ def edit_config(config: dict, lang: str) -> dict:
                 int(config.get("multi_launch_delay_seconds", 30)),
                 0,
             )
-        elif choice == "11":
-            configure_float_orientation(config, lang)
         elif choice == "12":
-            configure_grid_preset(config, lang)
+            configure_float_orientation(config, lang)
         elif choice == "13":
+            configure_grid_preset(config, lang)
+        elif choice == "14":
             if show_config_summary(config, lang):
                 save_config(config)
                 print(tr(lang, "Config tersimpan.", "Config saved."))

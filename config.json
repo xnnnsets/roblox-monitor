@@ -12,6 +12,8 @@
   "discord_webhook": "",
   "afk_timeout_minutes": 20,
   "clear_cache_mode": "target",
+  "auto_float": true,
+  "auto_grid": true,
   "auto_float_grid": true,
   "float_start_delay_seconds": 3,
   "multi_launch_delay_seconds": 30,

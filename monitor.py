@@ -32,7 +32,8 @@ MONITOR_SELECTION = str(config.get("monitor_selection", "")).lower()
 SELECTED_PACKAGES = config.get("selected_packages", [])
 AFK_TIMEOUT_MIN = float(config.get("afk_timeout_minutes", 20))
 LOG_SCAN_LINES = int(config.get("log_scan_lines", 4000))
-AUTO_FLOAT_GRID = bool(config.get("auto_float_grid", True))
+AUTO_FLOAT = bool(config.get("auto_float", config.get("auto_float_grid", True)))
+AUTO_GRID = bool(config.get("auto_grid", config.get("auto_float_grid", True)))
 FLOAT_START_DELAY = int(config.get("float_start_delay_seconds", 3))
 MULTI_LAUNCH_DELAY = int(config.get("multi_launch_delay_seconds", 30))
 FLOAT_ORIENTATION_MODE = str(config.get("float_orientation_mode", "system")).lower()
@@ -44,17 +45,15 @@ RED   = "\033[91m"
 CYAN  = "\033[96m"
 RESET = "\033[0m"
 
-AM_START_FEATURES = {
-    "checked": False,
-    "windowing_mode": False,
-    "launch_bounds": False,
-}
-
 DEVICE_PROFILE = {
     "checked": False,
     "sdk": 0,
-    "redfinger": False,
-    "name": "",
+    "density": 0,
+    "scale": 1.0,
+    "width": 1080,
+    "height": 2400,
+    "safe_inset_x": 24,
+    "safe_inset_y": 32,
 }
 
 
@@ -397,32 +396,33 @@ def get_device_profile():
     except Exception:
         DEVICE_PROFILE["sdk"] = 0
 
-    try:
-        name = subprocess.run(
-            ["sh", "-c", "printf '%s %s %s' \"$(getprop ro.product.manufacturer)\" \"$(getprop ro.product.brand)\" \"$(getprop ro.product.model)\""],
-            capture_output=True,
-            text=True,
-            timeout=3,
-        ).stdout.strip()
-    except Exception:
-        name = ""
+    width, height = get_screen_size()
+    DEVICE_PROFILE["width"] = width
+    DEVICE_PROFILE["height"] = height
 
-    lower_name = name.lower()
-    DEVICE_PROFILE["name"] = name
-    DEVICE_PROFILE["redfinger"] = any(token in lower_name for token in ("redfinger", "cloud", "virtual", "emulator"))
+    density = 0
+    code, density_out = run_su("wm density 2>/dev/null")
+    if code == 0:
+        density_matches = re.findall(r"(\d+)", density_out)
+        if density_matches:
+            density = int(density_matches[-1])
+    if density <= 0:
+        try:
+            raw = subprocess.run(["sh", "-c", "getprop ro.sf.lcd_density"], capture_output=True, text=True, timeout=3).stdout.strip()
+            density = int(raw or "0")
+        except Exception:
+            density = 0
+    if density <= 0:
+        density = 420
+
+    scale = max(1.0, density / 160.0)
+    DEVICE_PROFILE["density"] = density
+    DEVICE_PROFILE["scale"] = scale
+
+    # Density-aware safe insets from screen edges (edge-to-edge safety)
+    DEVICE_PROFILE["safe_inset_x"] = max(16, int(10 * scale), width // 48)
+    DEVICE_PROFILE["safe_inset_y"] = max(20, int(14 * scale), height // 50)
     return DEVICE_PROFILE
-
-
-def detect_am_start_features():
-    if AM_START_FEATURES["checked"]:
-        return
-    AM_START_FEATURES["checked"] = True
-    code, help_text = run_su("am start --help 2>/dev/null", timeout=4)
-    if code != 0 or not help_text.strip():
-        _, help_text = run_su("am start -h 2>/dev/null", timeout=4)
-    lower = (help_text or "").lower()
-    AM_START_FEATURES["windowing_mode"] = "--windowingmode" in lower
-    AM_START_FEATURES["launch_bounds"] = "--activity-launch-bounds" in lower
 
 
 def extract_task_id_from_text(text):
@@ -536,19 +536,28 @@ def find_task_candidates(package):
     return ids
 
 
-def try_apply_float_commands(task_id, left, top, right, bottom):
+def try_apply_float_commands(task_id, left, top, right, bottom, apply_float=True, apply_grid=True):
     commands = [
-        # Set freeform windowing mode (Android 9+)
-        f"cmd activity task set-windowing-mode {task_id} 5",
-        f"cmd activity set-windowing-mode {task_id} 5",
-        # Move to freeform stack (older API)
-        f"am stack move-task {task_id} 2 true",
-        f"cmd activity move-task {task_id} 2 true",
-        # Resize to target bounds
-        f"am task resize {task_id} {left} {top} {right} {bottom}",
-        f"cmd activity task set-bounds {task_id} {left} {top} {right} {bottom}",
-        f"cmd activity task resize {task_id} {left} {top} {right} {bottom}",
-        f"am stack resize 2 {left} {top} {right} {bottom}",
+        *(
+            [
+                f"cmd activity task set-windowing-mode {task_id} 5",
+                f"cmd activity set-windowing-mode {task_id} 5",
+                f"am stack move-task {task_id} 2 true",
+                f"cmd activity move-task {task_id} 2 true",
+            ]
+            if apply_float
+            else []
+        ),
+        *(
+            [
+                f"am task resize {task_id} {left} {top} {right} {bottom}",
+                f"cmd activity task set-bounds {task_id} {left} {top} {right} {bottom}",
+                f"cmd activity task resize {task_id} {left} {top} {right} {bottom}",
+                f"am stack resize 2 {left} {top} {right} {bottom}",
+            ]
+            if apply_grid
+            else []
+        ),
     ]
 
     success = False
@@ -560,32 +569,33 @@ def try_apply_float_commands(task_id, left, top, right, bottom):
     return success
 
 
-def clamp_bounds(left, top, right, bottom, width, height, top_offset=0, safe_margin=None):
-    safe = safe_margin if safe_margin is not None else max(14, min(width, height) // 35)
-    min_w = max(78, width // 10)
-    min_h = max(96, height // 10)
+def clamp_bounds(left, top, right, bottom, width, height, safe_left, safe_top, safe_right, safe_bottom, min_w, min_h):
+    max_left = max(safe_left, safe_right - min_w)
+    max_top = max(safe_top, safe_bottom - min_h)
 
-    max_left = max(safe, width - safe - min_w)
-    max_top = max(max(top_offset, safe), height - safe - min_h)
-
-    left = max(safe, min(left, max_left))
-    top = max(max(top_offset, safe), min(top, max_top))
-    right = min(width - safe, max(right, left + min_w))
-    bottom = min(height - safe, max(bottom, top + min_h))
+    left = max(safe_left, min(left, max_left))
+    top = max(safe_top, min(top, max_top))
+    right = min(safe_right, max(right, left + min_w))
+    bottom = min(safe_bottom, max(bottom, top + min_h))
 
     if right - left < min_w:
-        left = max(safe, right - min_w)
+        left = max(safe_left, right - min_w)
     if bottom - top < min_h:
-        top = max(max(top_offset, safe), bottom - min_h)
+        top = max(safe_top, bottom - min_h)
 
     return int(left), int(top), int(right), int(bottom)
 
 def get_grid_bounds(index, total, width, height):
     total = max(1, total)
     profile = get_device_profile()
-    gap = max(8, min(width, height) // 110)
-    top_offset = 58
-    bottom_margin = 12
+    scale = profile["scale"]
+    dpi = profile["density"]
+    edge_x = profile["safe_inset_x"]
+    edge_y = profile["safe_inset_y"]
+    gap = max(8, int(6 * scale), min(width, height) // 120)
+    top_offset = max(58, edge_y + int(10 * scale))
+    bottom_margin = max(12, edge_y)
+
     if FLOAT_ORIENTATION_MODE == "landscape":
         is_landscape = True
     elif FLOAT_ORIENTATION_MODE == "portrait":
@@ -593,27 +603,31 @@ def get_grid_bounds(index, total, width, height):
     else:
         is_landscape = width > height
 
-    # Modern Android freeform windows add titlebar/shadow/chrome.
-    # Use larger margins so app content doesn't appear offside/cropped.
-    safe_margin = max(20, min(width, height) // 24)
-    if profile["sdk"] >= 34:
-        safe_margin = max(safe_margin, 88 if not is_landscape else 56)
-    if profile["redfinger"]:
-        safe_margin = max(safe_margin, 96 if not is_landscape else 64)
-    top_offset = max(top_offset, safe_margin + (30 if not is_landscape else 20))
-    bottom_margin = max(bottom_margin, safe_margin // 2)
+    # Density-aware safe rectangle from edge-to-edge screen.
+    safe_left = edge_x
+    safe_right = width - edge_x
+    safe_top = top_offset
+    safe_bottom = height - bottom_margin
 
-    # Dock semua jendela ke sisi kanan layar
-    dock_ratio = 0.44 if is_landscape else 0.36
-    if profile["sdk"] >= 34:
-        dock_ratio = 0.38 if is_landscape else 0.32
-    if profile["redfinger"]:
-        dock_ratio = 0.34 if is_landscape else 0.30
-    dock_width = max(260, int(width * dock_ratio))
-    dock_left = max(0, width - dock_width)
+    available_total_w = max(240, safe_right - safe_left)
+    available_total_h = max(260, safe_bottom - safe_top)
 
-    available_w = max(200, dock_width - (gap * 2))
-    available_h = max(260, height - top_offset - bottom_margin - gap)
+    # Dock region near right side with conservative ratio to avoid offside.
+    dock_ratio = 0.40 if is_landscape else 0.32
+    if profile["sdk"] >= 34:
+        dock_ratio = 0.36 if is_landscape else 0.30
+    if GRID_LAYOUT_PRESET == "wide":
+        dock_ratio += 0.04
+    elif GRID_LAYOUT_PRESET == "ultra-compact":
+        dock_ratio -= 0.03
+
+    dock_ratio = max(0.26, min(0.56, dock_ratio))
+    dock_width = max(int(220 * scale), int(available_total_w * dock_ratio))
+    dock_width = min(available_total_w, dock_width)
+
+    dock_left = safe_right - dock_width
+    available_w = max(180, dock_width - (gap * 2))
+    available_h = max(220, available_total_h - gap)
 
     # Cell size + column count berdasarkan preset layout
     preset = GRID_LAYOUT_PRESET
@@ -650,8 +664,8 @@ def get_grid_bounds(index, total, width, height):
 
     # Cari kombinasi kolom/baris terbaik agar fit layar dan tidak offside
     pref_cols = cols
-    floor_w = max(72, min_w - 46)
-    floor_h = max(86, min_h - 52)
+    floor_w = max(int(64 * scale), min_w - int(44 * scale))
+    floor_h = max(int(78 * scale), min_h - int(48 * scale))
     best = None
     for cand_cols in range(1, total + 1):
         cand_rows = max(1, math.ceil(total / cand_cols))
@@ -677,23 +691,39 @@ def get_grid_bounds(index, total, width, height):
     col = index % cols
 
     used_w = cols * cell_w + (cols - 1) * gap
-    start_x = width - gap - used_w
-    min_left = 0 if is_landscape else dock_left + gap
+    start_x = safe_right - used_w
+    min_left = safe_left if is_landscape else dock_left + gap
     if start_x < min_left:
         start_x = min_left
 
     left = start_x + col * (cell_w + gap)
-    top = top_offset + gap + row * (cell_h + gap)
-    right = min(width - safe_margin, left + cell_w)
-    bottom = min(height - bottom_margin, top + cell_h)
+    top = safe_top + row * (cell_h + gap)
+    right = min(safe_right, left + cell_w)
+    bottom = min(safe_bottom, top + cell_h)
 
-    return clamp_bounds(left, top, right, bottom, width, height, top_offset=top_offset, safe_margin=safe_margin)
+    min_bound_w = max(int(76 * scale), width // 11)
+    min_bound_h = max(int(92 * scale), height // 11)
+    return clamp_bounds(
+        left,
+        top,
+        right,
+        bottom,
+        width,
+        height,
+        safe_left,
+        safe_top,
+        safe_right,
+        safe_bottom,
+        min_bound_w,
+        min_bound_h,
+    )
 
 def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
-    if not AUTO_FLOAT_GRID:
+    if not AUTO_FLOAT and not AUTO_GRID:
         return
 
-    enable_freeform_compat_settings()
+    if AUTO_FLOAT:
+        enable_freeform_compat_settings()
 
     # NOTE: Jangan paksa rotasi sistem di sini.
     # Di beberapa device/ROM (terutama virtual), ini memutar seluruh UI Termux
@@ -710,8 +740,6 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
     pass_delays = [0.0, 0.7, 1.3, 2.2]
     if profile["sdk"] >= 34:
         pass_delays.append(3.2)
-    if profile["redfinger"]:
-        pass_delays.extend([4.2, 5.5])
 
     for extra_delay in pass_delays:
         if extra_delay > 0:
@@ -726,7 +754,7 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
                 candidates.append(task_id)
 
         for task_id in candidates:
-            if try_apply_float_commands(task_id, left, top, right, bottom):
+            if try_apply_float_commands(task_id, left, top, right, bottom, apply_float=AUTO_FLOAT, apply_grid=AUTO_GRID):
                 success = True
                 break
 
@@ -746,12 +774,10 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
     print(f"[+] Package: {package}")
 
     launch_bounds = ""
-    if AUTO_FLOAT_GRID:
+    if AUTO_GRID:
         width, height = get_screen_size()
         left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
         launch_bounds = f"{left},{top},{right},{bottom}"
-
-    detect_am_start_features()
     
     launched = False
     
@@ -778,13 +804,17 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
         # Always try --windowingMode 5 first.
         # If unsupported by ROM, command will fail and fallback launch is used.
         start_commands = []
-        if AUTO_FLOAT_GRID:
-            if launch_bounds:
+        if AUTO_FLOAT:
+            if AUTO_GRID and launch_bounds:
                 start_commands.append(
                     f"am start --windowingMode 5 --activity-launch-bounds {launch_bounds} -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
                 )
             start_commands.append(
                 f"am start --windowingMode 5 -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
+            )
+        elif AUTO_GRID and launch_bounds:
+            start_commands.append(
+                f"am start --activity-launch-bounds {launch_bounds} -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
             )
         start_commands.append(
             f"am start -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
@@ -845,9 +875,8 @@ def display_dashboard(packages_info, memory_info, check_count):
 
 
 def apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_total):
-    if not AUTO_FLOAT_GRID:
+    if not AUTO_FLOAT and not AUTO_GRID:
         return
-    profile = get_device_profile()
     any_running = False
     for pkg in target_packages:
         _, running = is_package_running(pkg)
@@ -867,14 +896,6 @@ def apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_to
                 continue
             apply_float_grid(pkg, grid_index_map[pkg], grid_total)
             time.sleep(0.35)
-    if any_running and profile["redfinger"]:
-        time.sleep(2.2)
-        for pkg in target_packages:
-            _, running = is_package_running(pkg)
-            if not running:
-                continue
-            apply_float_grid(pkg, grid_index_map[pkg], grid_total)
-            time.sleep(0.5)
     if any_running:
         print("[v] Float startup sync selesai.")
 
@@ -890,11 +911,7 @@ def monitor():
         print("Cek kembali izin Termux di aplikasi Superuser lu.")
         sys.exit(1)
 
-    profile = get_device_profile()
-    if profile["redfinger"]:
-        print(f"[i] Redfinger/virtual mode terdeteksi: {profile['name'] or 'unknown'}")
-        print(f"[i] Jika Ctrl+C/Z tidak bekerja, hentikan via: touch {STOP_FILE}")
-        enable_freeform_compat_settings()
+    get_device_profile()
 
     print("[v] Mendeteksi paket Roblox yang terinstall...")
     installed_packages = find_roblox_packages()
