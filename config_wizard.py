@@ -93,6 +93,47 @@ def parse_server_code(raw: str) -> str:
     return text
 
 
+def detect_package_username(package: str) -> str:
+    patterns = [
+        r'"[Uu]ser[Nn]ame"\s*[:=]\s*"([A-Za-z0-9_]{3,20})"',
+        r'[Uu]ser[Nn]ame["\s=:]+([A-Za-z0-9_]{3,20})',
+    ]
+
+    raw = ""
+    try:
+        cmd = (
+            f"find /data/data/{package} -type f \\( -name '*.json' -o -name '*.xml' \\) 2>/dev/null"
+            f" | xargs grep -hi 'username' 2>/dev/null | head -20"
+        )
+        raw = subprocess.run(["su", "-c", cmd], capture_output=True, text=True, timeout=8).stdout
+    except Exception:
+        raw = ""
+    for pattern in patterns:
+        m = re.search(pattern, raw)
+        if m and m.group(1).lower() not in ("null", "true", "false", "string"):
+            return m.group(1)
+
+    logs = ""
+    try:
+        cmd = f"logcat -d -t 400 2>/dev/null | grep -Ei 'username|playername|{package}' | tail -30"
+        logs = subprocess.run(["su", "-c", cmd], capture_output=True, text=True, timeout=8).stdout
+    except Exception:
+        logs = ""
+    for pattern in patterns:
+        m = re.search(pattern, logs)
+        if m and m.group(1).lower() not in ("null", "true", "false", "string"):
+            return m.group(1)
+
+    return "unknown"
+
+
+def get_package_label(package: str) -> str:
+    username = detect_package_username(package)
+    if username and username != "unknown":
+        return f"{package} ({username})"
+    return package
+
+
 def load_config() -> dict:
     if not os.path.exists(CONFIG_PATH):
         return DEFAULT_CONFIG.copy()
@@ -222,10 +263,11 @@ def configure_server_settings(config: dict, lang: str, available: List[str]) -> 
     else:
         print(tr(lang, "Isi server code per package (kosong = pakai global)", "Set per-package server code (blank = use global)"))
         for pkg in available:
+            pkg_label = get_package_label(pkg)
             value = prompt(
                 lang,
-                f"{pkg} server link/code",
-                f"{pkg} server link/code",
+                f"{pkg_label} server link/code",
+                f"{pkg_label} server link/code",
                 per_map.get(pkg, ""),
             )
             per_map[pkg] = parse_server_code(value) if value else ""

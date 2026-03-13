@@ -3,6 +3,7 @@
 REPO_URL="https://github.com/xnnnsets/roblox-monitor"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_BACKUP="$HOME/.roblox-monitor-config.backup.json"
+CONFIG_BACKUP_LAST="$HOME/.roblox-monitor-config.last.json"
 
 if [ -d "$SCRIPT_DIR/.git" ]; then
     REPO_DIR="$SCRIPT_DIR"
@@ -52,10 +53,12 @@ backup_config() {
     rm -f "$CONFIG_BACKUP"
     if [ -f "$REPO_DIR/config.json" ]; then
         cp "$REPO_DIR/config.json" "$CONFIG_BACKUP" 2>/dev/null
+        cp "$REPO_DIR/config.json" "$CONFIG_BACKUP_LAST" 2>/dev/null
         return 0
     fi
     if [ -f "$SCRIPT_DIR/config.json" ]; then
         cp "$SCRIPT_DIR/config.json" "$CONFIG_BACKUP" 2>/dev/null
+        cp "$SCRIPT_DIR/config.json" "$CONFIG_BACKUP_LAST" 2>/dev/null
         return 0
     fi
     return 1
@@ -75,7 +78,7 @@ ensure_repo() {
         pkg install git -y || return 1
     fi
 
-    backup_config >/dev/null 2>&1 && say "[*] Backup config ditemukan." "[*] Existing config backup found."
+    backup_config >/dev/null 2>&1 && say "[*] Backup config ditemukan ($CONFIG_BACKUP_LAST)." "[*] Config backup found ($CONFIG_BACKUP_LAST)."
 
     if [ -d "$REPO_DIR/.git" ] && [ "$REPO_DIR" = "$SCRIPT_DIR" ]; then
         say "[*] Repo aktif terdeteksi, refresh dengan git..." "[*] Active repo detected, refreshing with git..."
