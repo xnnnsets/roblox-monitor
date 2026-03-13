@@ -57,6 +57,19 @@ DEVICE_PROFILE = {
     "name": "",
 }
 
+
+def term_cols() -> int:
+    return max(30, shutil.get_terminal_size(fallback=(60, 24)).columns)
+
+
+def short_code(text: str, head: int = 8) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return "-"
+    if len(value) <= head:
+        return value
+    return value[:head] + "..."
+
 def send_discord(msg):
     if WEBHOOK:
         try: requests.post(WEBHOOK, json={"content": msg}, timeout=5)
@@ -580,22 +593,22 @@ def get_grid_bounds(index, total, width, height):
     else:
         is_landscape = width > height
 
-    # Modern Android freeform windows have visible titlebar/shadow/chrome.
-    # Keep a larger safe zone so windows do not look offside.
-    safe_margin = max(16, min(width, height) // 26)
+    # Modern Android freeform windows add titlebar/shadow/chrome.
+    # Use larger margins so app content doesn't appear offside/cropped.
+    safe_margin = max(20, min(width, height) // 24)
     if profile["sdk"] >= 34:
-        safe_margin = max(safe_margin, 30 if not is_landscape else 22)
+        safe_margin = max(safe_margin, 88 if not is_landscape else 56)
     if profile["redfinger"]:
-        safe_margin = max(safe_margin, 36)
-    top_offset = max(top_offset, safe_margin + 24)
+        safe_margin = max(safe_margin, 96 if not is_landscape else 64)
+    top_offset = max(top_offset, safe_margin + (30 if not is_landscape else 20))
     bottom_margin = max(bottom_margin, safe_margin // 2)
 
     # Dock semua jendela ke sisi kanan layar
-    dock_ratio = 0.50 if is_landscape else 0.42
+    dock_ratio = 0.44 if is_landscape else 0.36
     if profile["sdk"] >= 34:
-        dock_ratio = 0.46 if is_landscape else 0.38
+        dock_ratio = 0.38 if is_landscape else 0.32
     if profile["redfinger"]:
-        dock_ratio = 0.40 if is_landscape else 0.34
+        dock_ratio = 0.34 if is_landscape else 0.30
     dock_width = max(260, int(width * dock_ratio))
     dock_left = max(0, width - dock_width)
 
@@ -682,15 +695,9 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
 
     enable_freeform_compat_settings()
 
-    # Paksa orientasi dulu, lalu baru hitung ukuran layar agar koordinat akurat.
-    if FLOAT_ORIENTATION_MODE == "landscape":
-        run_su("settings put system user_rotation 1")
-        run_su("settings put system accelerometer_rotation 0")
-        time.sleep(0.35)
-    elif FLOAT_ORIENTATION_MODE == "portrait":
-        run_su("settings put system user_rotation 0")
-        run_su("settings put system accelerometer_rotation 0")
-        time.sleep(0.35)
+    # NOTE: Jangan paksa rotasi sistem di sini.
+    # Di beberapa device/ROM (terutama virtual), ini memutar seluruh UI Termux
+    # dan justru bikin tampilan monitor berantakan.
 
     time.sleep(FLOAT_START_DELAY)
 
@@ -735,7 +742,7 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
 def join_server(package, activity_name, grid_index=0, grid_total=1):
     package_code = get_server_code_for_package(package)
     link = f"roblox://navigation/share_links?code={package_code}&type=Server"
-    print(f"[+] Joining: {link}")
+    print(f"[+] Joining server code: {short_code(package_code)}")
     print(f"[+] Package: {package}")
 
     launch_bounds = ""
