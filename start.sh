@@ -265,5 +265,14 @@ fi
 pick_language
 print_header
 ensure_repo || { say "[!] Gagal menyiapkan repository." "[!] Failed to prepare repository."; exit 1; }
+
+# Jika dijalankan dari luar repo (bootstrap), serahkan kontrol ke start.sh di repo
+# supaya selalu pakai versi terbaru dan tidak ada file start.sh ganda.
+if [ "$SCRIPT_DIR" != "$REPO_DIR" ] && [ -x "$REPO_DIR/start.sh" ]; then
+    say "[v] Meneruskan ke versi terbaru di repo..." "[v] Handing off to latest version in repo..."
+    say "[i] Untuk selanjutnya jalankan: $REPO_DIR/start.sh" "[i] Next time run directly: $REPO_DIR/start.sh"
+    exec "$REPO_DIR/start.sh"
+fi
+
 ensure_deps || { say "[!] Gagal menginstall dependencies." "[!] Failed to install dependencies."; exit 1; }
 main_menu

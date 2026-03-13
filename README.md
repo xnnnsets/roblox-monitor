@@ -3,11 +3,17 @@ Termux android, Rooted auto rejoin if crash or disconnect
 
 ## Quick Start
 
-Run:
-
+**Bootstrap (pertama kali / first time):**
 ```sh
-sh start.sh
+wget -O start.sh https://raw.githubusercontent.com/xnnnsets/roblox-monitor/refs/heads/main/start.sh && chmod +x start.sh && ./start.sh
 ```
+> `-O start.sh` memastikan file tidak jadi ganda (`start.sh.1`) jika sudah ada sebelumnya.
+
+**Selanjutnya (after first run):**
+```sh
+~/roblox-monitor/start.sh
+```
+Script akan otomatis update repo saat dijalankan.
 
 Menu flow:
 - Choose language (Indonesia / English)
