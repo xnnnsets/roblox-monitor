@@ -407,6 +407,71 @@ def find_task_id(package):
     return None
 
 
+def find_task_candidates(package):
+    """Return ordered unique taskId candidates related to package."""
+    pkg = package
+    commands = [
+        "dumpsys activity activities 2>/dev/null",
+        "dumpsys activity recents 2>/dev/null",
+        "cmd activity tasks 2>/dev/null",
+        "am task list 2>/dev/null",
+        "dumpsys activity top 2>/dev/null",
+    ]
+
+    ids = []
+    seen = set()
+
+    def push(task_id):
+        if task_id is None:
+            return
+        if task_id in seen:
+            return
+        seen.add(task_id)
+        ids.append(task_id)
+
+    for cmd in commands:
+        _, output = run_su(cmd, timeout=6)
+        if not output:
+            continue
+
+        lines = output.splitlines()
+        for idx, line in enumerate(lines):
+            if pkg not in line:
+                continue
+
+            # Parse same line first.
+            push(extract_task_id_from_text(line))
+
+            # Then parse a wider context around the package line.
+            start = max(0, idx - 12)
+            end = min(len(lines), idx + 13)
+            context = "\n".join(lines[start:end])
+            push(extract_task_id_from_text(context))
+
+    # Last fallback: existing single best finder
+    push(find_task_id(package))
+    return ids
+
+
+def try_apply_float_commands(task_id, left, top, right, bottom):
+    commands = [
+        f"cmd activity task set-windowing-mode {task_id} 5",
+        f"am stack move-task {task_id} 2 true",
+        f"cmd activity move-task {task_id} 2 true",
+        f"am task resize {task_id} {left} {top} {right} {bottom}",
+        f"cmd activity task resize {task_id} {left} {top} {right} {bottom}",
+        f"am stack resize 2 {left} {top} {right} {bottom}",
+    ]
+
+    success = False
+    for cmd in commands:
+        code, output = run_su(cmd)
+        out = (output or "").lower()
+        if code == 0 and "error" not in out and "unknown" not in out and "exception" not in out:
+            success = True
+    return success
+
+
 def clamp_bounds(left, top, right, bottom, width, height, top_offset=0):
     safe = max(14, min(width, height) // 35)
     min_w = max(78, width // 10)
@@ -527,6 +592,8 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
 
     run_su("settings put global enable_freeform_support 1")
     run_su("settings put global force_resizable_activities 1")
+    run_su("settings put global enable_non_resizable_multi_window 1")
+    run_su("settings put global development_settings_enabled 1")
 
     # Paksa orientasi dulu, lalu baru hitung ukuran layar agar koordinat akurat.
     if FLOAT_ORIENTATION_MODE == "landscape":
@@ -539,40 +606,35 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
         time.sleep(0.35)
 
     time.sleep(FLOAT_START_DELAY)
-    task_id = task_id_hint
-    for _ in range(4):
-        if task_id is not None:
-            break
-        task_id = find_task_id(package)
-        if task_id is not None:
-            break
-        time.sleep(0.7)
-    if task_id is None:
-        print(f"[!] Float skip: task id tidak ditemukan untuk {package}")
-        return
 
     width, height = get_screen_size()
     left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
 
-    float_commands = [
-        f"cmd activity task set-windowing-mode {task_id} 5",
-        f"am stack move-task {task_id} 2 true",
-        f"cmd activity move-task {task_id} 2 true",
-        f"am task resize {task_id} {left} {top} {right} {bottom}",
-        f"cmd activity task resize {task_id} {left} {top} {right} {bottom}",
-        f"am stack resize 2 {left} {top} {right} {bottom}",
-    ]
-
     success = False
-    for cmd in float_commands:
-        code, output = run_su(cmd)
-        if code == 0 and "error" not in output.lower() and "unknown" not in output.lower():
+    candidates = []
+    if task_id_hint is not None:
+        candidates.append(task_id_hint)
+
+    # Retry candidate discovery for a short period, because task info can be late.
+    for _ in range(5):
+        discovered = find_task_candidates(package)
+        for task_id in discovered:
+            if task_id not in candidates:
+                candidates.append(task_id)
+        if candidates:
+            break
+        time.sleep(0.6)
+
+    for task_id in candidates:
+        if try_apply_float_commands(task_id, left, top, right, bottom):
             success = True
+            break
 
     if success:
         print(f"[✓] Float grid applied: {package} -> [{left},{top},{right},{bottom}]")
     else:
-        print(f"[!] Float grid tidak didukung penuh di ROM ini ({package})")
+        hint = f" candidates={candidates}" if candidates else ""
+        print(f"[!] Float gagal untuk {package}.{hint}")
 
 def join_server(package, activity_name, grid_index=0, grid_total=1):
     package_code = get_server_code_for_package(package)
@@ -682,6 +744,16 @@ def apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_to
         print(f"[*] Apply float startup: {pkg}")
         apply_float_grid(pkg, grid_index_map[pkg], grid_total)
         time.sleep(0.4)
+
+    # Pass kedua: beberapa ROM baru expose task setelah beberapa detik.
+    if any_running:
+        time.sleep(1.2)
+        for pkg in target_packages:
+            _, running = is_package_running(pkg)
+            if not running:
+                continue
+            apply_float_grid(pkg, grid_index_map[pkg], grid_total)
+            time.sleep(0.35)
     if any_running:
         print("[v] Float startup sync selesai.")
 
