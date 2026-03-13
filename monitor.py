@@ -181,6 +181,38 @@ def get_roblox_username(package):
             return m.group(1)
     return "unknown"
 
+def save_username_cache(usernames):
+    """Persist detected usernames into config.json for config_wizard labels."""
+    try:
+        with open("config.json", "r", encoding="utf-8") as f:
+            latest_config = json.load(f)
+    except Exception:
+        return
+
+    current_map = latest_config.get("package_usernames", {})
+    if not isinstance(current_map, dict):
+        current_map = {}
+
+    changed = False
+    for pkg, username in (usernames or {}).items():
+        name = str(username or "").strip()
+        if not name or name.lower() == "unknown":
+            continue
+        if current_map.get(pkg) != name:
+            current_map[pkg] = name
+            changed = True
+
+    if not changed:
+        return
+
+    latest_config["package_usernames"] = current_map
+    try:
+        with open("config.json", "w", encoding="utf-8") as f:
+            json.dump(latest_config, f, indent=2)
+            f.write("\n")
+    except Exception:
+        return
+
 def get_memory_info():
     """Return (total_mb, free_mb, free_percent) from /proc/meminfo."""
     try:
@@ -565,6 +597,7 @@ def monitor():
     for pkg in target_packages:
         usernames[pkg] = get_roblox_username(pkg)
         print(f"    {pkg} -> {usernames[pkg]}")
+    save_username_cache(usernames)
 
     # Fallback interactive menu only if config has no explicit selection mode
     if len(target_packages) > 1 and MONITOR_SELECTION not in ("all", "selected"):
@@ -621,6 +654,7 @@ def monitor():
             join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total)
             pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
             usernames[pkg] = get_roblox_username(pkg)
+            save_username_cache({pkg: usernames[pkg]})
             # Jeda antar app jika ada lebih dari 1 yang harus dibuka
             if i < len(crashed_pkgs) - 1:
                 print(f"[*] Menunggu {MULTI_LAUNCH_DELAY} detik sebelum membuka app berikutnya...")
@@ -642,6 +676,7 @@ def monitor():
                     join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total)
                     pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                     usernames[pkg] = get_roblox_username(pkg)
+                    save_username_cache({pkg: usernames[pkg]})
                     break
 
         # Handle global disconnect / error detected in logcat (reconnect one package)
@@ -654,6 +689,7 @@ def monitor():
                     join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total)
                     pkg_state[pkg] = {'join_time': datetime.now(), 'last_activity': datetime.now()}
                     usernames[pkg] = get_roblox_username(pkg)
+                    save_username_cache({pkg: usernames[pkg]})
                     break  # one reconnect per check cycle
 
         time.sleep(INTERVAL)

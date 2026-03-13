@@ -27,11 +27,10 @@ DEFAULT_CONFIG = {
     "multi_launch_delay_seconds": 30,
     "float_orientation_mode": "system",
     "grid_layout_preset": "balanced",
+    "package_usernames": {},
 }
 
 _USERNAME_CACHE = {}
-_ROOT_ACCESS_CHECKED = False
-_HAS_ROOT_ACCESS = False
 
 
 def tr(lang: str, id_text: str, en_text: str) -> str:
@@ -99,54 +98,25 @@ def parse_server_code(raw: str) -> str:
     return text
 
 
-def has_root_access_quick() -> bool:
-    global _ROOT_ACCESS_CHECKED, _HAS_ROOT_ACCESS
-    if _ROOT_ACCESS_CHECKED:
-        return _HAS_ROOT_ACCESS
-    _ROOT_ACCESS_CHECKED = True
-    try:
-        result = subprocess.run(["su", "-c", "id"], capture_output=True, text=True, timeout=2)
-        output = (result.stdout or "") + (result.stderr or "")
-        _HAS_ROOT_ACCESS = result.returncode == 0 and "uid=0" in output
-    except Exception:
-        _HAS_ROOT_ACCESS = False
-    return _HAS_ROOT_ACCESS
-
-
-def detect_package_username(package: str) -> str:
+def detect_package_username(package: str, config: dict = None) -> str:
     cached = _USERNAME_CACHE.get(package)
     if cached:
         return cached
 
-    if not has_root_access_quick():
-        _USERNAME_CACHE[package] = "unknown"
-        return "unknown"
-
-    patterns = [
-        r'"[Uu]ser[Nn]ame"\s*[:=]\s*"([A-Za-z0-9_]{3,20})"',
-        r'[Uu]ser[Nn]ame["\s=:]+([A-Za-z0-9_]{3,20})',
-    ]
-
-    logs = ""
-    try:
-        safe_pkg = re.escape(package)
-        cmd = f"logcat -d -t 120 2>/dev/null | grep -Ei 'username|playername|{safe_pkg}' | tail -20"
-        logs = subprocess.run(["su", "-c", cmd], capture_output=True, text=True, timeout=2).stdout
-    except Exception:
-        logs = ""
-
-    for pattern in patterns:
-        m = re.search(pattern, logs)
-        if m and m.group(1).lower() not in ("null", "true", "false", "string"):
-            _USERNAME_CACHE[package] = m.group(1)
-            return m.group(1)
+    if isinstance(config, dict):
+        username_map = config.get("package_usernames", {})
+        if isinstance(username_map, dict):
+            username = str(username_map.get(package, "")).strip()
+            if username and username.lower() != "unknown":
+                _USERNAME_CACHE[package] = username
+                return username
 
     _USERNAME_CACHE[package] = "unknown"
     return "unknown"
 
 
-def get_package_label(package: str) -> str:
-    username = detect_package_username(package)
+def get_package_label(package: str, config: dict = None) -> str:
+    username = detect_package_username(package, config)
     if username and username != "unknown":
         return f"{package} ({username})"
     return package
@@ -163,6 +133,8 @@ def load_config() -> dict:
     config["selected_packages"] = normalize_packages(config.get("selected_packages", []))
     if not isinstance(config.get("server_code_by_package"), dict):
         config["server_code_by_package"] = {}
+    if not isinstance(config.get("package_usernames"), dict):
+        config["package_usernames"] = {}
     return config
 
 
@@ -171,6 +143,8 @@ def save_config(config: dict) -> None:
     config["selected_packages"] = normalize_packages(config.get("selected_packages", []))
     if not isinstance(config.get("server_code_by_package"), dict):
         config["server_code_by_package"] = {}
+    if not isinstance(config.get("package_usernames"), dict):
+        config["package_usernames"] = {}
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
         f.write("\n")
@@ -279,16 +253,14 @@ def configure_server_settings(config: dict, lang: str, available: List[str]) -> 
     if not available:
         print(tr(lang, "Tidak ada package, gunakan server code global.", "No packages available, using global server code."))
     else:
-        show_username = len(available) <= 4 and has_root_access_quick()
-        if not show_username:
-            print(tr(
-                lang,
-                "Label username dimatikan agar input tetap cepat.",
-                "Username labels are disabled to keep input responsive.",
-            ))
+        print(tr(
+            lang,
+            "Username diambil dari cache monitor (tanpa query root saat input).",
+            "Usernames are loaded from monitor cache (no root query during input).",
+        ))
         print(tr(lang, "Isi server code per package (kosong = pakai global)", "Set per-package server code (blank = use global)"))
         for pkg in available:
-            pkg_label = get_package_label(pkg) if show_username else pkg
+            pkg_label = get_package_label(pkg, config)
             value = prompt(
                 lang,
                 f"{pkg_label} server link/code",
