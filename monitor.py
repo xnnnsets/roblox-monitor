@@ -331,9 +331,11 @@ def run_su(command, timeout=8):
 def get_screen_size():
     code, output = run_su("wm size 2>/dev/null")
     if code == 0:
-        m = re.search(r"(\d+)x(\d+)", output)
-        if m:
-            return int(m.group(1)), int(m.group(2))
+        matches = re.findall(r"(\d+)x(\d+)", output)
+        if matches:
+            # Prefer baris terakhir (override size jika ada)
+            w, h = matches[-1]
+            return int(w), int(h)
     return 1080, 2400
 
 def find_task_id(package):
@@ -348,6 +350,27 @@ def find_task_id(package):
         if m:
             return int(m.group(1))
     return None
+
+
+def clamp_bounds(left, top, right, bottom, width, height, top_offset=0):
+    safe = max(6, min(width, height) // 120)
+    min_w = max(78, width // 10)
+    min_h = max(96, height // 10)
+
+    max_left = max(safe, width - safe - min_w)
+    max_top = max(max(top_offset, safe), height - safe - min_h)
+
+    left = max(safe, min(left, max_left))
+    top = max(max(top_offset, safe), min(top, max_top))
+    right = min(width - safe, max(right, left + min_w))
+    bottom = min(height - safe, max(bottom, top + min_h))
+
+    if right - left < min_w:
+        left = max(safe, right - min_w)
+    if bottom - top < min_h:
+        top = max(max(top_offset, safe), bottom - min_h)
+
+    return int(left), int(top), int(right), int(bottom)
 
 def get_grid_bounds(index, total, width, height):
     total = max(1, total)
@@ -401,12 +424,31 @@ def get_grid_bounds(index, total, width, height):
             else (3 if total >= 7 else 2 if total > 1 else 1)
 
     cols = max(1, min(cols, total))
-    rows = max(1, math.ceil(total / cols))
 
-    cell_w = (available_w - (gap * (cols - 1))) // cols
-    cell_h = (available_h - (gap * (rows - 1))) // rows
-    cell_w = max(min_w, min(cell_w, max_w))
-    cell_h = max(min_h, min(cell_h, max_h))
+    # Cari kombinasi kolom/baris terbaik agar fit layar dan tidak offside
+    pref_cols = cols
+    floor_w = max(72, min_w - 46)
+    floor_h = max(86, min_h - 52)
+    best = None
+    for cand_cols in range(1, total + 1):
+        cand_rows = max(1, math.ceil(total / cand_cols))
+        raw_w = (available_w - (gap * (cand_cols - 1))) // cand_cols
+        raw_h = (available_h - (gap * (cand_rows - 1))) // cand_rows
+        if raw_w < floor_w or raw_h < floor_h:
+            continue
+        score = (raw_w * raw_h) - abs(cand_cols - pref_cols) * 90
+        if best is None or score > best[0]:
+            best = (score, cand_cols, cand_rows, raw_w, raw_h)
+
+    if best is None:
+        rows = max(1, math.ceil(total / cols))
+        raw_w = max(70, (available_w - (gap * (cols - 1))) // cols)
+        raw_h = max(82, (available_h - (gap * (rows - 1))) // rows)
+    else:
+        _, cols, rows, raw_w, raw_h = best
+
+    cell_w = max(floor_w, min(raw_w, max_w))
+    cell_h = max(floor_h, min(raw_h, max_h))
 
     row = index // cols
     col = index % cols
@@ -422,7 +464,7 @@ def get_grid_bounds(index, total, width, height):
     right = min(width - gap, left + cell_w)
     bottom = min(height - gap, top + cell_h)
 
-    return left, top, right, bottom
+    return clamp_bounds(left, top, right, bottom, width, height, top_offset=top_offset)
 
 def apply_float_grid(package, grid_index, grid_total):
     if not AUTO_FLOAT_GRID or grid_total <= 1:
@@ -430,6 +472,16 @@ def apply_float_grid(package, grid_index, grid_total):
 
     run_su("settings put global enable_freeform_support 1")
     run_su("settings put global force_resizable_activities 1")
+
+    # Paksa orientasi dulu, lalu baru hitung ukuran layar agar koordinat akurat.
+    if FLOAT_ORIENTATION_MODE == "landscape":
+        run_su("settings put system user_rotation 1")
+        run_su("settings put system accelerometer_rotation 0")
+        time.sleep(0.35)
+    elif FLOAT_ORIENTATION_MODE == "portrait":
+        run_su("settings put system user_rotation 0")
+        run_su("settings put system accelerometer_rotation 0")
+        time.sleep(0.35)
 
     time.sleep(FLOAT_START_DELAY)
     task_id = find_task_id(package)
@@ -439,13 +491,6 @@ def apply_float_grid(package, grid_index, grid_total):
 
     width, height = get_screen_size()
     left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
-
-    if FLOAT_ORIENTATION_MODE == "landscape":
-        run_su(f"settings put system user_rotation 1")
-        run_su(f"settings put system accelerometer_rotation 0")
-    elif FLOAT_ORIENTATION_MODE == "portrait":
-        run_su(f"settings put system user_rotation 0")
-        run_su(f"settings put system accelerometer_rotation 0")
 
     float_commands = [
         f"cmd activity task set-windowing-mode {task_id} 5",
