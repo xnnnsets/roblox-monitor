@@ -48,6 +48,13 @@ AM_START_FEATURES = {
     "launch_bounds": False,
 }
 
+DEVICE_PROFILE = {
+    "checked": False,
+    "sdk": 0,
+    "redfinger": False,
+    "name": "",
+}
+
 def send_discord(msg):
     if WEBHOOK:
         try: requests.post(WEBHOOK, json={"content": msg}, timeout=5)
@@ -334,6 +341,34 @@ def run_su(command, timeout=8):
         return 1, str(e)
 
 
+def get_device_profile():
+    if DEVICE_PROFILE["checked"]:
+        return DEVICE_PROFILE
+
+    DEVICE_PROFILE["checked"] = True
+
+    try:
+        sdk_raw = subprocess.run(["sh", "-c", "getprop ro.build.version.sdk"], capture_output=True, text=True, timeout=3).stdout.strip()
+        DEVICE_PROFILE["sdk"] = int(sdk_raw or "0")
+    except Exception:
+        DEVICE_PROFILE["sdk"] = 0
+
+    try:
+        name = subprocess.run(
+            ["sh", "-c", "printf '%s %s %s' \"$(getprop ro.product.manufacturer)\" \"$(getprop ro.product.brand)\" \"$(getprop ro.product.model)\""],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        ).stdout.strip()
+    except Exception:
+        name = ""
+
+    lower_name = name.lower()
+    DEVICE_PROFILE["name"] = name
+    DEVICE_PROFILE["redfinger"] = any(token in lower_name for token in ("redfinger", "cloud", "virtual", "emulator"))
+    return DEVICE_PROFILE
+
+
 def detect_am_start_features():
     if AM_START_FEATURES["checked"]:
         return
@@ -480,8 +515,8 @@ def try_apply_float_commands(task_id, left, top, right, bottom):
     return success
 
 
-def clamp_bounds(left, top, right, bottom, width, height, top_offset=0):
-    safe = max(14, min(width, height) // 35)
+def clamp_bounds(left, top, right, bottom, width, height, top_offset=0, safe_margin=None):
+    safe = safe_margin if safe_margin is not None else max(14, min(width, height) // 35)
     min_w = max(78, width // 10)
     min_h = max(96, height // 10)
 
@@ -502,6 +537,7 @@ def clamp_bounds(left, top, right, bottom, width, height, top_offset=0):
 
 def get_grid_bounds(index, total, width, height):
     total = max(1, total)
+    profile = get_device_profile()
     gap = max(8, min(width, height) // 110)
     top_offset = 58
     bottom_margin = 12
@@ -512,8 +548,22 @@ def get_grid_bounds(index, total, width, height):
     else:
         is_landscape = width > height
 
+    # Modern Android freeform windows have visible titlebar/shadow/chrome.
+    # Keep a larger safe zone so windows do not look offside.
+    safe_margin = max(16, min(width, height) // 26)
+    if profile["sdk"] >= 34:
+        safe_margin = max(safe_margin, 30 if not is_landscape else 22)
+    if profile["redfinger"]:
+        safe_margin = max(safe_margin, 36)
+    top_offset = max(top_offset, safe_margin + 24)
+    bottom_margin = max(bottom_margin, safe_margin // 2)
+
     # Dock semua jendela ke sisi kanan layar
-    dock_ratio = 0.56 if is_landscape else 0.50
+    dock_ratio = 0.50 if is_landscape else 0.42
+    if profile["sdk"] >= 34:
+        dock_ratio = 0.46 if is_landscape else 0.38
+    if profile["redfinger"]:
+        dock_ratio = 0.40 if is_landscape else 0.34
     dock_width = max(260, int(width * dock_ratio))
     dock_left = max(0, width - dock_width)
 
@@ -589,10 +639,10 @@ def get_grid_bounds(index, total, width, height):
 
     left = start_x + col * (cell_w + gap)
     top = top_offset + gap + row * (cell_h + gap)
-    right = min(width - gap, left + cell_w)
-    bottom = min(height - gap, top + cell_h)
+    right = min(width - safe_margin, left + cell_w)
+    bottom = min(height - bottom_margin, top + cell_h)
 
-    return clamp_bounds(left, top, right, bottom, width, height, top_offset=top_offset)
+    return clamp_bounds(left, top, right, bottom, width, height, top_offset=top_offset, safe_margin=safe_margin)
 
 def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
     if not AUTO_FLOAT_GRID:
@@ -602,6 +652,8 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
     run_su("settings put global force_resizable_activities 1")
     run_su("settings put global enable_non_resizable_multi_window 1")
     run_su("settings put global development_settings_enabled 1")
+    run_su("settings put global freeform_window_management 1")
+    run_su("settings put secure freeform_window_management 1")
 
     # Paksa orientasi dulu, lalu baru hitung ukuran layar agar koordinat akurat.
     if FLOAT_ORIENTATION_MODE == "landscape":
@@ -615,27 +667,36 @@ def apply_float_grid(package, grid_index, grid_total, task_id_hint=None):
 
     time.sleep(FLOAT_START_DELAY)
 
-    width, height = get_screen_size()
-    left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
-
     success = False
     candidates = []
     if task_id_hint is not None:
         candidates.append(task_id_hint)
 
-    # Retry candidate discovery for a short period, because task info can be late.
-    for _ in range(5):
+    profile = get_device_profile()
+    pass_delays = [0.0, 0.7, 1.3, 2.2]
+    if profile["sdk"] >= 34:
+        pass_delays.append(3.2)
+    if profile["redfinger"]:
+        pass_delays.extend([4.2, 5.5])
+
+    for extra_delay in pass_delays:
+        if extra_delay > 0:
+            time.sleep(extra_delay)
+
+        width, height = get_screen_size()
+        left, top, right, bottom = get_grid_bounds(grid_index, grid_total, width, height)
+
         discovered = find_task_candidates(package)
         for task_id in discovered:
             if task_id not in candidates:
                 candidates.append(task_id)
-        if candidates:
-            break
-        time.sleep(0.6)
 
-    for task_id in candidates:
-        if try_apply_float_commands(task_id, left, top, right, bottom):
-            success = True
+        for task_id in candidates:
+            if try_apply_float_commands(task_id, left, top, right, bottom):
+                success = True
+                break
+
+        if success:
             break
 
     if success:
@@ -752,6 +813,7 @@ def display_dashboard(packages_info, memory_info, check_count):
 def apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_total):
     if not AUTO_FLOAT_GRID:
         return
+    profile = get_device_profile()
     any_running = False
     for pkg in target_packages:
         _, running = is_package_running(pkg)
@@ -771,6 +833,14 @@ def apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_to
                 continue
             apply_float_grid(pkg, grid_index_map[pkg], grid_total)
             time.sleep(0.35)
+    if any_running and profile["redfinger"]:
+        time.sleep(2.2)
+        for pkg in target_packages:
+            _, running = is_package_running(pkg)
+            if not running:
+                continue
+            apply_float_grid(pkg, grid_index_map[pkg], grid_total)
+            time.sleep(0.5)
     if any_running:
         print("[v] Float startup sync selesai.")
 
