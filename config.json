@@ -15,5 +15,6 @@
   "auto_float_grid": true,
   "float_start_delay_seconds": 3,
   "multi_launch_delay_seconds": 30,
-  "float_orientation_mode": "system"
+  "float_orientation_mode": "system",
+  "grid_layout_preset": "balanced"
 }

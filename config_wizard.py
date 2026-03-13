@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from typing import List
 
 CONFIG_PATH = "config.json"
@@ -25,6 +26,7 @@ DEFAULT_CONFIG = {
     "float_start_delay_seconds": 3,
     "multi_launch_delay_seconds": 30,
     "float_orientation_mode": "system",
+    "grid_layout_preset": "balanced",
 }
 
 
@@ -279,6 +281,7 @@ def configure_server_settings(config: dict, lang: str, available: List[str]) -> 
         config.get("server_code", ""),
     )
     config["server_code"] = parse_server_code(fallback)
+    validate_per_package_server_codes(config, lang, available)
 
 
 def configure_cache_mode(config: dict, lang: str) -> None:
@@ -308,6 +311,113 @@ def configure_float_orientation(config: dict, lang: str) -> None:
         config["float_orientation_mode"] = "portrait"
     else:
         config["float_orientation_mode"] = "system"
+
+
+def configure_grid_preset(config: dict, lang: str) -> None:
+    print_section(lang, "Preset Layout Grid", "Grid Layout Preset")
+    print("1. balanced       - " + tr(lang, "Ukuran jendela seimbang (default)", "Balanced window size (default)"))
+    print("2. compact        - " + tr(lang, "Jendela lebih kecil, lebih banyak kolom", "Smaller windows, more columns"))
+    print("3. ultra-compact  - " + tr(lang, "Jendela sangat kecil, kepadatan maksimal", "Very small windows, maximum density"))
+    print("4. wide           - " + tr(lang, "Jendela lebih besar, lebih sedikit kolom", "Bigger windows, fewer columns"))
+    current = str(config.get("grid_layout_preset", "balanced")).lower()
+    default_map = {"balanced": "1", "compact": "2", "ultra-compact": "3", "wide": "4"}
+    default = default_map.get(current, "1")
+    choice = prompt_menu_choice(lang, ["1", "2", "3", "4"], default=default)
+    presets = {"1": "balanced", "2": "compact", "3": "ultra-compact", "4": "wide"}
+    config["grid_layout_preset"] = presets[choice]
+
+
+def validate_per_package_server_codes(config: dict, lang: str, available: List[str]) -> None:
+    """Warn when per_package mode has packages missing a server code."""
+    if str(config.get("server_mode", "all")).lower() != "per_package":
+        return
+    by_pkg = config.get("server_code_by_package", {})
+    missing = [pkg for pkg in available if not str(by_pkg.get(pkg, "")).strip()]
+    if not missing:
+        return
+    print("\n" + tr(
+        lang,
+        f"PERINGATAN: {len(missing)} package belum punya server code per-package:",
+        f"WARNING: {len(missing)} package(s) have no per-package server code:",
+    ))
+    fallback = config.get("server_code", "")
+    fb_str = (fallback[:22] + "...") if len(fallback) > 22 else (fallback or "-")
+    for pkg in missing:
+        print(f"   - {pkg}")
+    if fallback.strip():
+        print(tr(lang, f"   Akan memakai global fallback: {fb_str}", f"   Will use global fallback: {fb_str}"))
+    else:
+        print(tr(
+            lang,
+            "   GLOBAL FALLBACK JUGA KOSONG! Package tsb tidak akan join private server.",
+            "   GLOBAL FALLBACK IS ALSO EMPTY! Packages without code won't join any server.",
+        ))
+
+
+def show_config_summary(config: dict, lang: str) -> bool:
+    """Display a full settings summary. Returns True if user confirms save."""
+    clear_screen()
+    print_section(lang, "PREVIEW CONFIG \u2014 REVIEW SEBELUM SIMPAN", "CONFIG PREVIEW \u2014 REVIEW BEFORE SAVING")
+
+    print("\n" + tr(lang, "[ PACKAGE ]", "[ PACKAGE ]"))
+    print(f"  mode         : {config.get('package_mode', 'auto')}")
+    manual = config.get("manual_packages", [])
+    print(f"  manual list  : {', '.join(manual) if manual else '-'}")
+    print(f"  monitor      : {config.get('monitor_selection', 'all')}")
+    selected = config.get("selected_packages", [])
+    print(f"  selected     : {', '.join(selected) if selected else '-'}")
+
+    print("\n" + tr(lang, "[ PRIVATE SERVER ]", "[ PRIVATE SERVER ]"))
+    server_mode = config.get("server_mode", "all")
+    print(f"  mode         : {server_mode}")
+    if server_mode == "all":
+        code = config.get("server_code", "")
+        short = (code[:22] + "...") if len(code) > 22 else (code or "-")
+        print(f"  server code  : {short}")
+    else:
+        by_pkg = config.get("server_code_by_package", {})
+        if by_pkg:
+            for pkg, code in by_pkg.items():
+                short = (code[:18] + "...") if len(code) > 18 else (code or tr(lang, "kosong", "empty"))
+                print(f"  {pkg[:32]:<32}: {short}")
+        else:
+            print(f"  {tr(lang, '(belum ada per-package code)', '(no per-package codes set)')}")
+        fallback = config.get("server_code", "")
+        fb_str = (fallback[:22] + "...") if len(fallback) > 22 else (fallback or "-")
+        print(f"  fallback     : {fb_str}")
+
+    print("\n" + tr(lang, "[ GRID FLOAT ]", "[ GRID FLOAT ]"))
+    af = config.get("auto_float_grid", True)
+    print(f"  auto float   : {tr(lang, 'ya', 'yes') if af else tr(lang, 'tidak', 'no')}")
+    print(f"  orientasi    : {config.get('float_orientation_mode', 'system')}")
+    print(f"  preset grid  : {config.get('grid_layout_preset', 'balanced')}")
+    print(f"  start delay  : {config.get('float_start_delay_seconds', 3)}s")
+    print(f"  launch delay : {config.get('multi_launch_delay_seconds', 30)}s")
+
+    print("\n" + tr(lang, "[ LAINNYA ]", "[ OTHER ]"))
+    print(f"  check interval  : {config.get('check_interval', 10)}s")
+    print(f"  afk timeout     : {config.get('afk_timeout_minutes', 20)} min")
+    print(f"  clear cache     : {config.get('clear_cache_mode', 'target')}")
+    webhook = config.get("discord_webhook", "")
+    print(f"  discord webhook : {'(set)' if webhook else '-'}")
+
+    # Inline validation warning
+    if server_mode == "per_package":
+        by_pkg = config.get("server_code_by_package", {})
+        all_pkgs = normalize_packages(
+            config.get("manual_packages", []) + config.get("selected_packages", [])
+        )
+        missing = [p for p in all_pkgs if not str(by_pkg.get(p, "")).strip()]
+        if missing:
+            print("\n" + tr(
+                lang,
+                f"\u26a0  {len(missing)} package belum punya server code per-package!",
+                f"\u26a0  {len(missing)} package(s) missing per-package server code!",
+            ))
+
+    print("\n" + "=" * 54)
+    raw = input(tr(lang, "Simpan setting ini? (y/n) [y]: ", "Save these settings? (y/n) [y]: ")).strip().lower()
+    return raw == "" or raw in ("y", "yes", "1")
 
 
 def choose_packages_interactive(lang: str, available: List[str], current_selected: List[str]) -> List[str]:
@@ -532,7 +642,11 @@ def quick_setup(config: dict, lang: str) -> dict:
         0,
     )
     configure_float_orientation(config, lang)
+    configure_grid_preset(config, lang)
 
+    if not show_config_summary(config, lang):
+        print(tr(lang, "Setup dibatalkan. Config tidak disimpan.", "Setup cancelled. Config not saved."))
+        sys.exit(0)
     return config
 
 
@@ -553,10 +667,11 @@ def edit_config(config: dict, lang: str) -> dict:
         print("9. " + tr(lang, "Float start delay", "Float start delay"))
         print("10. " + tr(lang, "Jeda buka antar app", "Delay between app launches"))
         print("11. " + tr(lang, "Orientasi float/grid", "Float/grid orientation"))
-        print("12. " + tr(lang, "Simpan dan keluar", "Save and exit"))
+        print("12. " + tr(lang, "Preset layout grid", "Grid layout preset"))
+        print("13. " + tr(lang, "Simpan dan keluar", "Save and exit"))
         print("0. " + tr(lang, "Batal", "Cancel"))
 
-        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "0"], default="0")
+        choice = prompt_menu_choice(lang, options=["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "0"], default="0")
         if choice == "1":
             available = resolve_source_packages(config)
             configure_server_settings(config, lang, available)
@@ -614,9 +729,13 @@ def edit_config(config: dict, lang: str) -> dict:
         elif choice == "11":
             configure_float_orientation(config, lang)
         elif choice == "12":
-            save_config(config)
-            print(tr(lang, "Config tersimpan.", "Config saved."))
-            return config
+            configure_grid_preset(config, lang)
+        elif choice == "13":
+            if show_config_summary(config, lang):
+                save_config(config)
+                print(tr(lang, "Config tersimpan.", "Config saved."))
+                return config
+            print(tr(lang, "Simpan dibatalkan, kembali ke menu.", "Save cancelled, back to menu."))
         elif choice == "0":
             print(tr(lang, "Edit dibatalkan.", "Edit cancelled."))
             return config

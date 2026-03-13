@@ -32,6 +32,7 @@ AUTO_FLOAT_GRID = bool(config.get("auto_float_grid", True))
 FLOAT_START_DELAY = int(config.get("float_start_delay_seconds", 3))
 MULTI_LAUNCH_DELAY = int(config.get("multi_launch_delay_seconds", 30))
 FLOAT_ORIENTATION_MODE = str(config.get("float_orientation_mode", "system")).lower()
+GRID_LAYOUT_PRESET = str(config.get("grid_layout_preset", "balanced")).lower()
 
 # ANSI color codes
 GREEN = "\033[92m"
@@ -336,23 +337,42 @@ def get_grid_bounds(index, total, width, height):
     available_w = max(200, dock_width - (gap * 2))
     available_h = max(260, height - top_offset - bottom_margin - gap)
 
-    # Landscape lebih padat kolom agar muat banyak app
-    if is_landscape:
-        cols = 4 if total >= 10 else (3 if total >= 4 else 2)
-    else:
-        cols = 3 if total >= 7 else (2 if total > 1 else 1)
+    # Cell size + column count berdasarkan preset layout
+    preset = GRID_LAYOUT_PRESET
+    if preset == "ultra-compact":
+        max_w = 160 if is_landscape else 135
+        max_h = 155 if is_landscape else 170
+        min_w = 90 if is_landscape else 85
+        min_h = 110 if is_landscape else 115
+        cols = (5 if total >= 12 else 4 if total >= 6 else 3) if is_landscape \
+            else (4 if total >= 8 else 3 if total >= 3 else 2)
+    elif preset == "compact":
+        max_w = 225 if is_landscape else 175
+        max_h = 190 if is_landscape else 210
+        min_w = 105 if is_landscape else 98
+        min_h = 125 if is_landscape else 130
+        cols = (4 if total >= 8 else 3 if total >= 4 else 2) if is_landscape \
+            else (3 if total >= 6 else 2 if total > 1 else 1)
+    elif preset == "wide":
+        max_w = 370 if is_landscape else 275
+        max_h = 285 if is_landscape else 315
+        min_w = 150 if is_landscape else 130
+        min_h = 165 if is_landscape else 175
+        cols = (3 if total >= 7 else 2 if total >= 3 else 1) if is_landscape \
+            else (2 if total >= 4 else 1)
+    else:  # balanced (default)
+        max_w = 280 if is_landscape else 210
+        max_h = 220 if is_landscape else 250
+        min_w = 120 if is_landscape else 110
+        min_h = 140 if is_landscape else 145
+        cols = (4 if total >= 10 else 3 if total >= 4 else 2) if is_landscape \
+            else (3 if total >= 7 else 2 if total > 1 else 1)
 
     cols = max(1, min(cols, total))
     rows = max(1, math.ceil(total / cols))
 
     cell_w = (available_w - (gap * (cols - 1))) // cols
     cell_h = (available_h - (gap * (rows - 1))) // rows
-
-    # Paksa ukuran kecil agar muat lebih banyak Roblox
-    max_w = 280 if is_landscape else 210
-    max_h = 220 if is_landscape else 250
-    min_w = 120 if is_landscape else 110
-    min_h = 140 if is_landscape else 145
     cell_w = max(min_w, min(cell_w, max_w))
     cell_h = max(min_h, min(cell_h, max_h))
 
@@ -514,6 +534,21 @@ def monitor():
         target_packages = installed_packages
     if not target_packages:
         target_packages = ["com.roblox.client"]
+
+    # Validasi server code per-package jika mode per_package
+    if SERVER_MODE == "per_package":
+        missing_codes = [
+            pkg for pkg in target_packages
+            if not str(SERVER_CODE_BY_PACKAGE.get(pkg, "")).strip()
+        ]
+        if missing_codes:
+            print(f"[!] WARNING: {len(missing_codes)} package tidak punya server code per-package:")
+            for pkg in missing_codes:
+                print(f"    - {pkg}")
+            if CODE.strip():
+                print(f"[!] Fallback ke global server code: {CODE[:22]}..." if len(CODE) > 22 else f"[!] Fallback ke global server code: {CODE}")
+            else:
+                print("[!] GLOBAL FALLBACK JUGA KOSONG! Package tsb tidak akan join private server.")
 
     print(f"[v] Installed: {len(installed_packages)} paket: {', '.join(installed_packages)}")
     print(f"[v] Target monitor: {len(target_packages)} paket: {', '.join(target_packages)}")
