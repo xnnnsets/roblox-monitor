@@ -350,8 +350,11 @@ def extract_task_id_from_text(text):
     if not text:
         return None
     patterns = [
-        r"taskId=(\d+)",
-        r"Task\{[^#\n]*#(\d+)",
+        r"[Tt]ask\s+id[:\s]+([1-9]\d*)",      # "Task id: 67" - from am start output
+        r"mTaskId\s*=\s*([1-9]\d*)",            # mTaskId=67 from dumpsys window
+        r"taskId=([1-9]\d*)",
+        r"Task\{[^#\n]*#([1-9]\d*)",
+        r"\bTaskRecord\{[^#\n]*#([1-9]\d*)",
         r"\bt(\d{1,5})\b",
         r"\bid=(\d{1,5})\b",
     ]
@@ -413,6 +416,7 @@ def find_task_candidates(package):
     commands = [
         "dumpsys activity activities 2>/dev/null",
         "dumpsys activity recents 2>/dev/null",
+        "dumpsys window windows 2>/dev/null",   # reliable mTaskId= source
         "cmd activity tasks 2>/dev/null",
         "am task list 2>/dev/null",
         "dumpsys activity top 2>/dev/null",
@@ -455,9 +459,13 @@ def find_task_candidates(package):
 
 def try_apply_float_commands(task_id, left, top, right, bottom):
     commands = [
+        # Set freeform windowing mode (Android 9+)
         f"cmd activity task set-windowing-mode {task_id} 5",
+        f"cmd activity set-windowing-mode {task_id} 5",
+        # Move to freeform stack (older API)
         f"am stack move-task {task_id} 2 true",
         f"cmd activity move-task {task_id} 2 true",
+        # Resize to target bounds
         f"am task resize {task_id} {left} {top} {right} {bottom}",
         f"cmd activity task resize {task_id} {left} {top} {right} {bottom}",
         f"am stack resize 2 {left} {top} {right} {bottom}",
@@ -465,7 +473,7 @@ def try_apply_float_commands(task_id, left, top, right, bottom):
 
     success = False
     for cmd in commands:
-        code, output = run_su(cmd)
+        code, output = run_su(cmd, timeout=5)
         out = (output or "").lower()
         if code == 0 and "error" not in out and "unknown" not in out and "exception" not in out:
             success = True
@@ -672,9 +680,11 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
     
     for activity in activities_to_try:
         print(f"[*] Trying: -n {package}/{activity}")
+        # Always try --windowingMode 5 first.
+        # If unsupported by ROM, command will fail and fallback launch is used.
         start_commands = []
-        if AUTO_FLOAT_GRID and AM_START_FEATURES["windowing_mode"]:
-            if launch_bounds and AM_START_FEATURES["launch_bounds"]:
+        if AUTO_FLOAT_GRID:
+            if launch_bounds:
                 start_commands.append(
                     f"am start --windowingMode 5 --activity-launch-bounds {launch_bounds} -n '{package}/{activity}' -a android.intent.action.VIEW -d '{link}'"
                 )
@@ -686,8 +696,10 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
         )
 
         for start_cmd in start_commands:
-            code, out = run_su(start_cmd, timeout=6)
-            if code == 0 and 'error' not in out.lower() and 'unknown option' not in out.lower():
+            code, out = run_su(start_cmd, timeout=8)
+            out_lower = out.lower()
+            bad = 'error: ' in out_lower or 'unknown option' in out_lower or 'exception' in out_lower
+            if code == 0 and not bad:
                 launched_task_id = extract_task_id_from_text(out)
                 print(f"[✓] Launched via {activity}")
                 launched = True
@@ -704,32 +716,37 @@ def join_server(package, activity_name, grid_index=0, grid_total=1):
     apply_float_grid(package, grid_index, grid_total, task_id_hint=launched_task_id)
 
 def display_dashboard(packages_info, memory_info, check_count):
-    """Compact dashboard for narrow Termux screens (no wide table wrapping)."""
+    """Ultra-compact dashboard — safe down to ~30 column Termux screens."""
     total, free, pct = memory_info
-    term_cols = shutil.get_terminal_size(fallback=(80, 24)).columns
+    term_cols = max(30, shutil.get_terminal_size(fallback=(60, 24)).columns)
 
     def fit_text(text, width):
         text = str(text)
-        if width <= 1:
-            return text[:width]
-        return text if len(text) <= width else text[: width - 1] + "…"
+        if width <= 0:
+            return ""
+        return text if len(text) <= width else text[: max(0, width - 1)] + "…"
 
+    sep = "-" * min(40, term_cols)
     os.system('clear')
-    print("=" * min(52, term_cols))
-    print(" ROBLOX MONITOR")
-    print("=" * min(52, term_cols))
+    print(sep)
+    print(fit_text("ROBLOX MONITOR", term_cols))
+    print(sep)
 
     n = len(packages_info)
-    max_line = max(28, term_cols - 2)
     for idx, (pkg, username, running) in enumerate(packages_info, start=1):
-        label = fit_text(f"{pkg} ({username})", max_line - 14)
-        status_text = "Online" if running else "Offline"
+        status_text = "ON" if running else "OFF"
         status_col = GREEN if running else RED
-        print(f"{idx}. {label} -> {status_col}{status_text}{RESET}")
+        short_pkg = pkg.replace("com.roblox.", "rblx.")
+        uname = username if username != "unknown" else "?"
+        prefix = f"{idx}."
+        avail = term_cols - len(prefix) - 1 - len(status_text) - 1
+        label = fit_text(f"{short_pkg}({uname})", max(8, avail))
+        print(f"{prefix} {label} {status_col}{status_text}{RESET}")
 
-    print("-" * min(52, term_cols))
-    print(f"System Memory: Checking [{check_count}/{max(1, n)}] Free: {free}MB ({pct}%)")
-    print("=" * min(52, term_cols))
+    print(sep)
+    mem_line = f"RAM:{free}MB({pct}%) [{check_count}/{max(1,n)}]"
+    print(fit_text(mem_line, term_cols))
+    print(sep)
 
 
 def apply_float_grid_to_running_targets(target_packages, grid_index_map, grid_total):
@@ -908,11 +925,16 @@ def monitor():
         time.sleep(INTERVAL)
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGINT, signal.default_int_handler)
+    def _hard_exit(signum, frame):
+        # Use os._exit to guarantee termination even if subprocess.run is blocking.
+        print("\n[!] Monitor dihentikan.")
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, _hard_exit)
     if hasattr(signal, "SIGTSTP"):
-        signal.signal(signal.SIGTSTP, signal.default_int_handler)
+        signal.signal(signal.SIGTSTP, _hard_exit)
     try:
         monitor()
     except KeyboardInterrupt:
         print("\n[!] Monitor dihentikan user (Ctrl+C).")
-        sys.exit(0)
+        os._exit(0)
