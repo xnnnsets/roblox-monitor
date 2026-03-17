@@ -32,7 +32,7 @@ Important notes:
 Run this in Termux:
 
 ```sh
-wget -O start.sh https://raw.githubusercontent.com/xnnnsets/roblox-monitor/refs/heads/main/start.sh && chmod +x start.sh && ./start.sh
+curl -L -o start.sh https://raw.githubusercontent.com/xnnnsets/roblox-monitor/refs/heads/main/start.sh && chmod +x start.sh && ./start.sh
 ```
 
 Quick explanation:
