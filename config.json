@@ -6,7 +6,7 @@
   "monitor_selection": "all",
   "selected_packages": [],
   "check_interval": 10,
-  "server_code": "540f6bae817236499dcf96ed6374f773",
+  "server_code": "",
   "server_mode": "all",
   "server_code_by_package": {},
   "discord_webhook": "",
@@ -18,6 +18,6 @@
   "float_start_delay_seconds": 3,
   "multi_launch_delay_seconds": 30,
   "float_orientation_mode": "system",
-  "grid_layout_preset": "balanced",
+  "grid_layout_preset": "compact",
   "package_usernames": {}
 }
