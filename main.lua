@@ -188,6 +188,57 @@ local function runtime_log(message, important)
   print(message)
 end
 
+local function setup_monitor_hotkeys()
+  local code, stty_state = run_cmd("stty -g < /dev/tty 2>/dev/null")
+  if code ~= 0 or trim(stty_state) == "" then
+    return nil
+  end
+  run_cmd("stty -icanon -echo min 0 time 0 susp undef < /dev/tty 2>/dev/null || true")
+  return trim(stty_state)
+end
+
+local function restore_monitor_hotkeys(stty_state)
+  if not stty_state or stty_state == "" then
+    return
+  end
+  run_cmd("stty " .. shell_quote(stty_state) .. " < /dev/tty 2>/dev/null || true")
+end
+
+local function poll_monitor_control_key()
+  local _, key = run_cmd("if [ -r /dev/tty ]; then IFS= read -r -n 1 -t 0.001 key < /dev/tty && printf '%s' \"$key\"; fi")
+  key = tostring(key or "")
+  if key == "" then
+    return nil
+  end
+  local lower = key:lower()
+  if lower == "q" then
+    return "quit"
+  end
+  if lower == "s" or key == string.char(26) then
+    return "stop"
+  end
+  return nil
+end
+
+local function monitor_sleep_with_control(seconds)
+  local total = math.max(0, tonumber(seconds) or 0)
+  if total <= 0 then
+    return poll_monitor_control_key()
+  end
+  local step = 0.2
+  local elapsed = 0
+  while elapsed < total do
+    local command = poll_monitor_control_key()
+    if command then
+      return command
+    end
+    local wait_time = math.min(step, total - elapsed)
+    sleep_seconds(wait_time)
+    elapsed = elapsed + wait_time
+  end
+  return poll_monitor_control_key()
+end
+
 local json = {}
 
 local function decode_error(str, idx, msg)
@@ -1870,6 +1921,38 @@ local function run_monitor(config, lang)
   clear_screen()
   clear_cache_and_kill_targets(config, lang)
   run_cmd("command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock")
+  local monitor_stty_state = setup_monitor_hotkeys()
+  local function monitor_cleanup(exit_message)
+    restore_monitor_hotkeys(monitor_stty_state)
+    run_cmd("command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock")
+    if RUNTIME_STATE.monitor_compact then
+      clear_terminal_line()
+      print("")
+    end
+    if exit_message and exit_message ~= "" then
+      runtime_log(exit_message, true)
+    end
+  end
+
+  local function consume_monitor_command(command)
+    if command == "quit" then
+      monitor_cleanup(tr(lang,
+        "[*] Hotkey q terdeteksi, keluar dari script.",
+        "[*] Hotkey q detected, quitting script."))
+      return "quit"
+    elseif command == "stop" then
+      monitor_cleanup(tr(lang,
+        "[*] Hotkey s/Ctrl+Z terdeteksi, stop monitor dan kembali ke menu.",
+        "[*] Hotkey s/Ctrl+Z detected, stopping monitor and returning to menu."))
+      return "menu"
+    end
+    return nil
+  end
+
+  runtime_log(tr(lang,
+    "[HOTKEY] q=keluar script | s=stop monitor ke menu | Ctrl+Z=stop monitor",
+    "[HOTKEY] q=quit script | s=stop monitor to menu | Ctrl+Z=stop monitor"), true)
+
   local installed = select(1, scan_packages())
   local targets = resolve_target_packages(config)
   if #targets == 0 then targets = installed end
@@ -1891,7 +1974,11 @@ local function run_monitor(config, lang)
   end
   save_username_cache(config, usernames)
   run_su("logcat -c")
-  sleep_seconds(1)
+  local early_cmd = monitor_sleep_with_control(1)
+  local early_result = consume_monitor_command(early_cmd)
+  if early_result then
+    return early_result
+  end
   local pkg_state = {}
   local grid_index_map = {}
   for i, pkg in ipairs(targets) do
@@ -1917,11 +2004,21 @@ local function run_monitor(config, lang)
     for index, pkg in ipairs(initial_missing) do
       join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total, config)
       pkg_state[pkg] = {join_time = os.time(), last_activity = os.time()}
-      if username_delay > 0 then sleep_seconds(username_delay) end
+      if username_delay > 0 then
+        local cmd = monitor_sleep_with_control(username_delay)
+        local result = consume_monitor_command(cmd)
+        if result then
+          return result
+        end
+      end
       usernames[pkg] = get_roblox_username(pkg, config, use_aggressive)
       save_username_cache(config, {[pkg] = usernames[pkg]})
       if index < #initial_missing then
-        sleep_seconds(initial_gap)
+        local cmd = monitor_sleep_with_control(initial_gap)
+        local result = consume_monitor_command(cmd)
+        if result then
+          return result
+        end
       end
     end
   end
@@ -1939,6 +2036,12 @@ local function run_monitor(config, lang)
     print("")
   end
   while true do
+    local cmd_start = poll_monitor_control_key()
+    local start_result = consume_monitor_command(cmd_start)
+    if start_result then
+      return start_result
+    end
+
     loop_count = loop_count + 1
     check_count = (check_count % math.max(1, #targets)) + 1
     local packages_info = {}
@@ -1981,13 +2084,23 @@ local function run_monitor(config, lang)
       join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total, config)
       pkg_state[pkg] = {join_time = os.time(), last_activity = os.time()}
       local _ud1 = math.max(0, tonumber(config.username_fetch_delay_seconds) or 5)
-      if _ud1 > 0 then sleep_seconds(_ud1) end
+      if _ud1 > 0 then
+        local cmd = monitor_sleep_with_control(_ud1)
+        local result = consume_monitor_command(cmd)
+        if result then
+          return result
+        end
+      end
       usernames[pkg] = get_roblox_username(pkg, config, config.aggressive_username_detection ~= false)
       save_username_cache(config, {[pkg] = usernames[pkg]})
       last_snapshot = nil
       last_safe_line = nil
       if i < #crashed_pkgs then
-        sleep_seconds(config.multi_launch_delay_seconds or 30)
+        local cmd = monitor_sleep_with_control(config.multi_launch_delay_seconds or 30)
+        local result = consume_monitor_command(cmd)
+        if result then
+          return result
+        end
       end
     end
     local is_error, reason, skip_rejoin = false, nil, false
@@ -2007,7 +2120,13 @@ local function run_monitor(config, lang)
             join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total, config)
             pkg_state[pkg] = {join_time = os.time(), last_activity = os.time()}
             local _ud2 = math.max(0, tonumber(config.username_fetch_delay_seconds) or 5)
-            if _ud2 > 0 then sleep_seconds(_ud2) end
+            if _ud2 > 0 then
+              local cmd = monitor_sleep_with_control(_ud2)
+              local result = consume_monitor_command(cmd)
+              if result then
+                return result
+              end
+            end
             usernames[pkg] = get_roblox_username(pkg, config, config.aggressive_username_detection ~= false)
             save_username_cache(config, {[pkg] = usernames[pkg]})
             last_snapshot = nil
@@ -2017,7 +2136,11 @@ local function run_monitor(config, lang)
         end
       end
     end
-    sleep_seconds(config.check_interval or 10)
+    local cmd_wait = monitor_sleep_with_control(config.check_interval or 10)
+    local wait_result = consume_monitor_command(cmd_wait)
+    if wait_result then
+      return wait_result
+    end
   end
 end
 
@@ -2096,7 +2219,10 @@ local function main_menu(config)
     elseif choice == "3" then
       save_config(config)
       clear_screen()
-      run_monitor(config, lang)
+      local monitor_result = run_monitor(config, lang)
+      if monitor_result == "quit" then
+        return
+      end
     elseif choice == "4" then
       misc_menu(config, lang)
     else
