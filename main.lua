@@ -1619,6 +1619,19 @@ local function apply_rotation_lock(orientation_mode)
   -- "system" = respect user/rotation-control-app setting, don't override
 end
 
+local function apply_initial_rotation(config)
+  -- Always apply rotation lock BEFORE cache clear, regardless of auto_float/auto_grid
+  -- This ensures rotation is locked before system events can reset it
+  local orientation = tostring(config.float_orientation_mode or "system")
+  if orientation == "system" then
+    -- No forced rotation; system will use device setting or rotation control app
+    return
+  end
+  -- Force rotation to landscape or portrait
+  apply_rotation_lock(orientation)
+  runtime_log(string.format("[*] Initial rotation lock applied: %s", orientation), true)
+end
+
 local function join_server(package, activity_name, grid_index, grid_total, config)
   local server_code = config.server_code
   if config.server_mode == "per_package" and type(config.server_code_by_package) == "table" and trim(config.server_code_by_package[package] or "") ~= "" then
@@ -1912,6 +1925,9 @@ local function render_monitor_safe_line(packages_info, memory_info, loop_count)
 end
 
 local function clear_cache_and_kill_targets(config, lang)
+  -- Apply rotation FIRST before clearing cache, so system doesn't reset rotation during cache clear
+  apply_initial_rotation(config)
+  
   local targets = resolve_cache_packages(config)
   if #targets == 0 then
     say(lang, "[!] Tidak ada package target yang terkonfigurasi/terdeteksi.", "[!] No target package configured/detected.")
