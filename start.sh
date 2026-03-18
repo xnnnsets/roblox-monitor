@@ -62,22 +62,13 @@ cleanup() {
     command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock >/dev/null 2>&1 || true
 }
 
-stop_monitor() {
-    if [ -n "${LUA_PID:-}" ]; then
-        kill -TERM "$LUA_PID" 2>/dev/null || true
-        pkill -TERM -P "$LUA_PID" 2>/dev/null || true
-    fi
+on_interrupt() {
     cleanup
     exit 130
 }
 
-trap stop_monitor INT TERM HUP QUIT TSTP
+trap on_interrupt INT TERM HUP QUIT
+trap cleanup EXIT
 
-lua "$REPO_DIR/main.lua" "$@" &
-LUA_PID=$!
-wait "$LUA_PID"
-STATUS=$?
-
-trap - INT TERM HUP QUIT TSTP
-cleanup
-exit "$STATUS"
+lua "$REPO_DIR/main.lua" "$@"
+exit $?
