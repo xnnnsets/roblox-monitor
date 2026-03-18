@@ -526,6 +526,9 @@ local function load_config()
   config.selected_packages = normalize_packages(config.selected_packages or {})
   config.server_code_by_package = type(config.server_code_by_package) == "table" and config.server_code_by_package or {}
   config.package_usernames = type(config.package_usernames) == "table" and config.package_usernames or {}
+  if config.float_orientation_mode ~= "system" and config.float_orientation_mode ~= "landscape" and config.float_orientation_mode ~= "portrait" then
+    config.float_orientation_mode = "system"
+  end
   if config.monitor_ui_mode ~= "live" and config.monitor_ui_mode ~= "safe" then
     config.monitor_ui_mode = "safe"
   end
@@ -545,6 +548,9 @@ local function save_config(config)
   config.auto_float_grid = config.auto_float and config.auto_grid
   config.server_code_by_package = type(config.server_code_by_package) == "table" and config.server_code_by_package or {}
   config.package_usernames = type(config.package_usernames) == "table" and config.package_usernames or {}
+  if config.float_orientation_mode ~= "system" and config.float_orientation_mode ~= "landscape" and config.float_orientation_mode ~= "portrait" then
+    config.float_orientation_mode = "system"
+  end
   if config.monitor_ui_mode ~= "live" and config.monitor_ui_mode ~= "safe" then
     config.monitor_ui_mode = "safe"
   end
@@ -856,7 +862,7 @@ local function print_config_body(config, lang)
   print("\n[GRID / FLOAT]")
   print(" auto float   : " .. tostring(config.auto_float))
   print(" auto grid    : " .. tostring(config.auto_grid))
-  print(" orientation  : " .. ((config.auto_float or config.auto_grid) and tostring(config.float_orientation_mode) or "-"))
+  print(" orientation  : " .. tostring(config.float_orientation_mode or "system"))
   print(" grid preset  : " .. (config.auto_grid and tostring(config.grid_layout_preset) or "-"))
   print(" start delay  : " .. (config.auto_float and (tostring(config.float_start_delay_seconds) .. "s") or "-"))
   print(" launch delay : " .. tostring(config.multi_launch_delay_seconds) .. "s")
@@ -922,9 +928,7 @@ local function quick_setup(config, lang)
   config.multi_launch_delay_seconds = prompt_int(lang, "Jeda buka antar app (detik)", "Delay between app launches (seconds)", config.multi_launch_delay_seconds or 30, 0)
   config.log_check_every_cycles = prompt_int(lang, "Cek log setiap berapa siklus", "Check logs every how many cycles", config.log_check_every_cycles or 3, 1)
   configure_monitor_ui_mode(config, lang)
-  if config.auto_float or config.auto_grid then
-    configure_float_orientation(config, lang)
-  end
+  configure_float_orientation(config, lang)
   if config.auto_grid then
     configure_grid_preset(config, lang)
   end
@@ -1016,11 +1020,9 @@ local function edit_config(config, lang)
     add_item(tr(lang, "Mode output monitor", "Monitor output mode"), function()
       configure_monitor_ui_mode(config, lang)
     end)
-    if config.auto_float or config.auto_grid then
-      add_item(tr(lang, "Orientasi float/grid", "Float/grid orientation"), function()
-        configure_float_orientation(config, lang)
-      end)
-    end
+    add_item(tr(lang, "Orientasi float/grid", "Float/grid orientation"), function()
+      configure_float_orientation(config, lang)
+    end)
     if config.auto_grid then
       add_item(tr(lang, "Preset layout grid", "Grid layout preset"), function()
         configure_grid_preset(config, lang)
