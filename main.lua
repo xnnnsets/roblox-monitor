@@ -41,7 +41,7 @@ local COLOR = {
 }
 
 local DEVICE_PROFILE = { checked = false }
-local RUNTIME_STATE = { monitor_compact = false, monitor_ui_mode = "safe" }
+local RUNTIME_STATE = { monitor_compact = false, monitor_ui_mode = "safe", monitor_hotkeys_enabled = false }
 
 local function shell_quote(value)
   value = tostring(value or "")
@@ -191,13 +191,16 @@ end
 local function setup_monitor_hotkeys()
   local code, stty_state = run_cmd("stty -g < /dev/tty 2>/dev/null")
   if code ~= 0 or trim(stty_state) == "" then
+    RUNTIME_STATE.monitor_hotkeys_enabled = false
     return nil
   end
   run_cmd("stty -icanon -echo min 0 time 0 susp undef < /dev/tty 2>/dev/null || true")
+  RUNTIME_STATE.monitor_hotkeys_enabled = true
   return trim(stty_state)
 end
 
 local function restore_monitor_hotkeys(stty_state)
+  RUNTIME_STATE.monitor_hotkeys_enabled = false
   if not stty_state or stty_state == "" then
     return
   end
@@ -205,7 +208,15 @@ local function restore_monitor_hotkeys(stty_state)
 end
 
 local function poll_monitor_control_key()
-  local _, key = run_cmd("if [ -r /dev/tty ]; then IFS= read -r -n 1 -t 0.001 key < /dev/tty && printf '%s' \"$key\"; fi")
+  if not RUNTIME_STATE.monitor_hotkeys_enabled then
+    return nil
+  end
+  local ok, key = pcall(function()
+    return io.stdin:read(1)
+  end)
+  if not ok then
+    return nil
+  end
   key = tostring(key or "")
   if key == "" then
     return nil
