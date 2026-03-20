@@ -2286,6 +2286,14 @@ elseif not options.autorun and not options.mode then
   config.language = pick_language(config.language)
 end
 
+if not check_root_permission() then
+  local lang = (options.lang == "en" or options.lang == "id") and options.lang or (config.language or "id")
+  say(lang,
+    "[!] Script ini butuh akses root (su). Pastikan device sudah root dan Termux diberi izin superuser, lalu jalankan ulang.",
+    "[!] This script requires root access (su). Make sure the device is rooted and Termux has superuser permission, then run it again.")
+  os.exit(1)
+end
+
 if options.mode == "setup" then
   config = quick_setup(config, config.language)
   save_config(config)
