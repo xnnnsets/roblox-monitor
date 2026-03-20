@@ -2288,6 +2288,7 @@ end
 
 if not check_root_permission() then
   local lang = (options.lang == "en" or options.lang == "id") and options.lang or (config.language or "id")
+  os.execute("clear")
   say(lang,
     "[!] Script ini butuh akses root (su). Pastikan device sudah root dan Termux diberi izin superuser, lalu jalankan ulang.",
     "[!] This script requires root access (su). Make sure the device is rooted and Termux has superuser permission, then run it again.")
