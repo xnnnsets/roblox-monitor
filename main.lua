@@ -2195,6 +2195,7 @@ local function setup_boot_autorun(lang)
   }
   write_file(path, table.concat(script, "\n") .. "\n")
   run_cmd("chmod +x " .. shell_quote(path))
+  clear_screen()
   say(lang, "[v] Boot script dibuat: " .. path, "[v] Boot script created: " .. path)
   say(lang, "[*] Wajib install app Termux:Boot dan buka 1x setelah install.", "[*] You must install Termux:Boot app and open it once after install.")
   say(lang, "[*] Log autorun: ~/.termux/boot/roblox-monitor.log", "[*] Autorun log: ~/.termux/boot/roblox-monitor.log")
