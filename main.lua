@@ -2189,8 +2189,6 @@ local function setup_boot_autorun(lang)
     "cd " .. shell_quote(repo_dir),
     "if [ -x ./start.sh ]; then",
     "  nohup ./start.sh --autorun >> \"$LOG_FILE\" 2>&1 &",
-    "  sleep 2",
-    "  am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -n com.termux/.app.TermuxActivity >/dev/null 2>&1 || am start -n com.termux/.HomeActivity >/dev/null 2>&1 || true",
     "else",
     "  echo \"[!] start.sh tidak ditemukan / tidak executable\" >> \"$LOG_FILE\"",
     "fi",
