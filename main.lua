@@ -2180,9 +2180,25 @@ local function setup_boot_autorun(lang)
   run_cmd("mkdir -p " .. shell_quote(boot_dir))
   local path = boot_dir .. "/roblox-monitor.sh"
   local _, cwd = run_cmd("pwd")
-  write_file(path, "#!/data/data/com.termux/files/usr/bin/sh\ncd " .. shell_quote(trim(cwd)) .. "\n./start.sh --autorun\n")
+  local repo_dir = trim(cwd)
+  local script = {
+    "#!/data/data/com.termux/files/usr/bin/sh",
+    "LOG_FILE=\"$HOME/.termux/boot/roblox-monitor.log\"",
+    "while [ \"$(getprop sys.boot_completed 2>/dev/null)\" != \"1\" ]; do sleep 2; done",
+    "sleep 20",
+    "am start -n com.termux/.HomeActivity >/dev/null 2>&1 || true",
+    "cd " .. shell_quote(repo_dir),
+    "if [ -x ./start.sh ]; then",
+    "  nohup ./start.sh --autorun >> \"$LOG_FILE\" 2>&1 &",
+    "else",
+    "  echo \"[!] start.sh tidak ditemukan / tidak executable\" >> \"$LOG_FILE\"",
+    "fi",
+  }
+  write_file(path, table.concat(script, "\n") .. "\n")
   run_cmd("chmod +x " .. shell_quote(path))
-  say(lang, "[v] Boot script dibuat.", "[v] Boot script created.")
+  say(lang, "[v] Boot script dibuat: " .. path, "[v] Boot script created: " .. path)
+  say(lang, "[*] Wajib install app Termux:Boot dan buka 1x setelah install.", "[*] You must install Termux:Boot app and open it once after install.")
+  say(lang, "[*] Log autorun: ~/.termux/boot/roblox-monitor.log", "[*] Autorun log: ~/.termux/boot/roblox-monitor.log")
 end
 
 local function remove_boot_autorun(lang)
