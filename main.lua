@@ -1820,6 +1820,8 @@ local function check_game_status(config)
   local patterns = {
     {"Sending disconnect with reason:%s*277", "Disconnect reason 277"},
     {"Sending disconnect with reason:%s*26%d", "AFK disconnect"},
+    {"Sending disconnect with reason:%s*279", "Disconnect reason 279"},
+    {"Sending disconnect with reason:%s*27%d"},
     {"Lost connection with reason%s*:%s*Lost connection to the game server", "Lost connection to game server"},
     {"%[FLog::Network%]%s+Connection lost", "Connection lost"},
     {"ID_CONNECTION_LOST", "ID_CONNECTION_LOST"},
