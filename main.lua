@@ -1595,8 +1595,11 @@ local function is_package_running(package)
 end
 
 local function kill_roblox(package)
-  runtime_log("[!] Restarting " .. package .. " & cleaning logs...", true)
+  runtime_log("[!] Restarting " .. package .. " & cleaning cache...", true)
   run_su("am force-stop " .. package)
+  -- Clear app cache and code_cache directories
+  run_su("rm -rf /data/data/" .. package .. "/cache/* /data/data/" .. package .. "/code_cache/* 2>/dev/null || true")
+  -- Clear logcat to avoid re-detecting same error
   run_su("logcat -c")
 end
 
