@@ -1,13 +1,38 @@
-# roblox-monitor
+# roblox-monitor (beta-2024.06.02)
 
 Roblox monitor script for Termux (rooted Android) to:
-- Auto rejoin when the app crashes/dies.
-- Detect disconnect/error patterns from logcat.
-- Manage multiple Roblox packages (official + clones).
-- Apply auto float/grid window behavior based on config.
+- **Auto rejoin** when app crashes/disconnects/dies with instant detection.
+- **Detect disconnect/error** patterns from logcat with full coverage (code 273, 277, etc).
+- **Manage multiple Roblox packages** (official + clones) with safe handling.
+- **Apply auto float/grid** window behavior on A12+ and A10.
+- **Auto-run on reboot** with Magisk service.d fallback (no required Termux:Boot first-open).
 
 Main runtime is in `main.lua`.
 `start.sh` is used as bootstrap/update + dependency installer, then it runs `main.lua`.
+
+---
+
+## 0) Changelog Latest (v2024.06.02)
+
+**Disconnect Detection Improvements:**
+- Detect universal disconnect codes: 273, 277, 26x, 27x, and variants
+- Pattern coverage: "Sending disconnect", "Disconnection Notification", "Lost connection", timeout/error
+- Status check every cycle (instant detection, not N-cycle delay)
+- Auto kill + rejoin + cache clear in one operation
+
+**Cache & Resource Improvements:**
+- Kill app now includes automatic cache clearing (`/data/data/pkg/cache/*`)
+- Cache clearing consistent between startup and error handler
+
+**Boot Autorun Improvements:**
+- Setup boot via Termux:Boot + Magisk service.d fallback
+- Root-level service works without forced Termux:Boot first-open
+- Log to `/data/local/tmp/roblox-monitor-boot.log` for debugging
+
+**Safety Improvements:**
+- Prevent double-execute with `crashed[pkg]` state flag
+- Multi-app rejoin staggered with config delay
+- Guard condition in error handler: `if running and not crashed[pkg]`
 
 ---
 
@@ -107,6 +132,50 @@ Examples:
 - `Aggressive username detection? (y/n)`
   - `y` = retries + extra scan sources (stronger detection, slightly heavier).
   - `n` = normal scan only (lighter, but more chance to get `unknown`).
+
+---
+
+## 5.5) Disconnect Detection Explanation (NEW)
+
+Monitor now auto-detects disconnect with comprehensive pattern coverage:
+
+**"Sending disconnect" format:**
+```
+Sending disconnect with reason: 273 (game joined elsewhere)
+Sending disconnect with reason: 277 (server maintenance)
+Sending disconnect with reason: 26x (AFK timeout)
+```
+
+**"Disconnection Notification" format:**
+```
+Disconnection Notification. Reason: 273
+Disconnection Notification. Reason: 277
+```
+
+**"Lost connection" format:**
+```
+Lost connection with reason : Lost connection to the game server
+Connection lost
+ID_CONNECTION_LOST
+```
+
+**Timeout/Error format:**
+```
+AckTimeout
+Session Transition FSM: Error Occurred
+SignalRCoreError.*Disconnected
+```
+
+**Behavior when disconnect detected:**
+1. Log event with timestamp
+2. Force-stop package
+3. Auto clear cache
+4. Clear logcat buffer
+5. Rejoin server
+6. Fetch username
+7. Resume normal monitoring next cycle
+
+Detection runs **every cycle** (not N-cycle), so response is **instant**.
 
 ---
 
@@ -261,7 +330,42 @@ Beginner-friendly baseline (adjust as needed):
 
 ---
 
-## 8) Quick FAQ
+## 8) Boot Autorun Troubleshooting
+
+### Setup Boot Autorun
+1. Main menu → `Misc` → `Setup auto exec after reboot`
+2. Script creates:
+   - `/data/data/com.termux/files/home/.termux/boot/roblox-monitor.sh`
+   - `/data/adb/service.d/roblox-monitor.sh` (root fallback, if Magisk active)
+3. Reboot device
+4. Monitor runs automatically
+
+### Debug Boot Autorun
+**Termux:Boot log:**
+```sh
+tail -n 120 ~/.termux/boot/roblox-monitor.log
+```
+
+**Root fallback log (Magisk service.d):**
+```sh
+tail -n 120 /data/local/tmp/roblox-monitor-boot.log
+```
+
+**Check if Magisk is active:**
+```sh
+test -d /data/adb && echo "Magisk active" || echo "Magisk not active"
+```
+
+### If Boot Doesn't Run
+1. Ensure Termux:Boot is installed (Google Play / Aptoide)
+2. Open Termux:Boot app once (to register daemon)
+3. Run setup boot again
+4. If using Magisk, check `/data/adb/service.d/` is readable & executable
+5. Check logs at both paths above
+
+---
+
+## 9) Quick FAQ
 
 ### Q: Why is username still `unknown`?
 
@@ -283,7 +387,7 @@ A:
 
 ---
 
-## 9) Super Short Version (For New Users)
+## 10) Super Short Version (For New Users)
 
 If you just want to run fast:
 1. Run `./start.sh`.

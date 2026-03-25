@@ -1,13 +1,38 @@
-# roblox-monitor
+# roblox-monitor (beta-2024.06.02)
 
 Script monitor Roblox di Termux (Android root) untuk:
-- Auto rejoin saat app crash/mati.
-- Cek error/disconnect dari logcat.
-- Kelola multi package Roblox (official + clone).
-- Auto float/grid window (sesuai setting).
+- **Auto rejoin** saat app crash/disconnect/mati dengan deteksi instant.
+- **Cek error/disconnect** dari logcat dengan pattern coverage lengkap (code 273, 277, dst).
+- **Kelola multi package** Roblox (official + clone) dengan safely handling.
+- **Auto float/grid window** (sesuai setting) di A12+ dan A10.
+- **Auto-run saat reboot** dengan fallback Magisk service.d (tanpa wajib buka Termux:Boot 1x).
 
 Runtime utama ada di `main.lua`.
 `start.sh` dipakai sebagai bootstrap/update + instal dependensi, lalu menjalankan `main.lua`.
+
+---
+
+## 0) Changelog Terbaru (v2024.06.02)
+
+**Perbaikan Disconnect Detection:**
+- Deteksi disconnect code universal: 273, 277, 26x, 27x, dan varian lainnya
+- Coverage pattern: "Sending disconnect", "Disconnection Notification", "Lost connection", timeout/error
+- Check status setiap cycle (instant detection, bukan N-cycle delay)
+- Auto kill + rejoin + cache clear dalam 1 operasi
+
+**Perbaikan Cache & Resource:**
+- Kill app sekarang include cache clearing otomatis (`/data/data/pkg/cache/*`)
+- Clear cache konsisten antara startup dan error handler
+
+**Perbaikan Boot Autorun:**
+- Setup boot via Termux:Boot + fallback Magisk service.d
+- Fallback root-level service jalan tanpa wajib buka app Termux:Boot 1x
+- Log ke `/data/local/tmp/roblox-monitor-boot.log` untuk debug
+
+**Safety Improvements:**
+- Prevent double-execute dengan state flag `crashed[pkg]`
+- Multi-app rejoin staggered dengan delay config
+- Guard condition di error handler: `if running and not crashed[pkg]`
 
 ---
 
@@ -107,6 +132,50 @@ Contoh:
 - `Aggressive username detection? (y/n)`
   - `y` = retry + sumber scan tambahan (lebih kuat, sedikit lebih berat).
   - `n` = scan normal saja (lebih ringan, tapi peluang `unknown` lebih besar).
+
+---
+
+## 5.5) Penjelasan Deteksi Disconnect (NEW)
+
+Monitor sekarang deteksi disconnect otomatis dengan pattern lengkap:
+
+**Format "Sending disconnect":**
+```
+Sending disconnect with reason: 273 (game joined elsewhere)
+Sending disconnect with reason: 277 (server maintenance)
+Sending disconnect with reason: 26x (AFK timeout)
+```
+
+**Format "Disconnection Notification":**
+```
+Disconnection Notification. Reason: 273
+Disconnection Notification. Reason: 277
+```
+
+**Format "Lost connection":**
+```
+Lost connection with reason : Lost connection to the game server
+Connection lost
+ID_CONNECTION_LOST
+```
+
+**Format Timeout/Error:**
+```
+AckTimeout
+Session Transition FSM: Error Occurred
+SignalRCoreError.*Disconnected
+```
+
+**Behavior saat terdeteksi disconnect:**
+1. Log event dengan timestamp
+2. Force-stop package
+3. Clear cache otomatis
+4. Clear logcat buffer
+5. Rejoin server
+6. Fetch username
+7. Next cycle normal monitoring
+
+Deteksi ini berjalan **setiap cycle** (bukan N-cycle), jadi response **instant**.
 
 ---
 
@@ -261,7 +330,42 @@ Baseline pemula (silakan sesuaikan):
 
 ---
 
-## 8) FAQ Singkat
+## 8) Boot Autorun Troubleshooting
+
+### Setup Boot Autorun
+1. Di menu utama → `Misc` → `Setup auto jalan setelah reboot`
+2. Script akan membuat:
+   - `/data/data/com.termux/files/home/.termux/boot/roblox-monitor.sh`
+   - `/data/adb/service.d/roblox-monitor.sh` (fallback root, jika Magisk aktif)
+3. Reboot device
+4. Monitor otomatis jalan
+
+### Debug Boot Autorun
+**Log Termux:Boot:**
+```sh
+tail -n 120 ~/.termux/boot/roblox-monitor.log
+```
+
+**Log Fallback Root (Magisk service.d):**
+```sh
+tail -n 120 /data/local/tmp/roblox-monitor-boot.log
+```
+
+**Cek apakah Magisk aktif:**
+```sh
+test -d /data/adb && echo "Magisk aktif" || echo "Magisk tidak aktif"
+```
+
+### Jika Boot Tidak Jalan
+1. Pastikan Termux:Boot sudah install (dari Google Play / Aptoide)
+2. Buka app Termux:Boot sekali (untuk register daemon)
+3. Jalankan setup boot lagi
+4. Jika pakai Magisk, cek `/data/adb/service.d/` readable & executable
+5. Cek log di kedua path di atas
+
+---
+
+## 9) FAQ Singkat
 
 ### Q: Kenapa username masih `unknown`?
 
@@ -283,7 +387,7 @@ A:
 
 ---
 
-## 9) Versi Super Singkat (User Baru)
+## 10) Versi Super Singkat (User Baru)
 
 Kalau mau cepat:
 1. Jalankan `./start.sh`.

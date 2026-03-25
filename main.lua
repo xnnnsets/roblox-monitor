@@ -1,5 +1,5 @@
 local CONFIG_PATH = "../config.json"
-local VERSION = "beta-2024.06.01"
+local VERSION = "beta-2024.06.02"
 
 local DEFAULT_CONFIG = {
   language = "id",
