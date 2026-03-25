@@ -5,7 +5,7 @@ Script monitor Roblox di Termux (Android root) untuk:
 - **Cek error/disconnect** dari logcat dengan pattern coverage lengkap (code 273, 277, dst).
 - **Kelola multi package** Roblox (official + clone) dengan safely handling.
 - **Auto float/grid window** (sesuai setting) di A12+ dan A10.
-- **Auto-run saat reboot** dengan fallback Magisk service.d (tanpa wajib buka Termux:Boot 1x).
+- **Auto-run saat reboot** via Termux:Boot.
 
 Runtime utama ada di `main.lua`.
 `start.sh` dipakai sebagai bootstrap/update + instal dependensi, lalu menjalankan `main.lua`.
@@ -25,9 +25,9 @@ Runtime utama ada di `main.lua`.
 - Clear cache konsisten antara startup dan error handler
 
 **Perbaikan Boot Autorun:**
-- Setup boot via Termux:Boot + fallback Magisk service.d
-- Fallback root-level service jalan tanpa wajib buka app Termux:Boot 1x
-- Log ke `/data/local/tmp/roblox-monitor-boot.log` untuk debug
+- Setup boot via Termux:Boot (`~/.termux/boot/roblox-monitor.sh`)
+- Logging autorun ke `~/.termux/boot/roblox-monitor.log`
+- Setup langsung dari menu `Misc`
 
 **Safety Improvements:**
 - Prevent double-execute dengan state flag `crashed[pkg]`
@@ -108,6 +108,39 @@ Menu utama:
 - `2. Edit config` = ubah setting detail kapan saja.
 - `3. Optimize + Launch Apps` = mulai monitor.
 - `4. Misc` = auto-run setelah reboot + update repo.
+
+### 4.5) Hotkey Saat Monitor Berjalan (NEW)
+
+Saat monitor aktif, kamu bisa pakai hotkey berikut:
+- `q` = keluar total dari script.
+- `s` atau `Ctrl+Z` = stop monitor lalu kembali ke menu utama.
+- `p` = pause/resume auto-rejoin (monitor tetap jalan).
+
+Catatan:
+- Mode pause hanya menonaktifkan auto-rejoin. Tampilan monitor tetap update.
+
+### 4.6) Mode CLI (NEW)
+
+`main.lua` mendukung mode non-interaktif:
+
+```sh
+lua main.lua --mode setup
+lua main.lua --mode edit
+lua main.lua --mode monitor
+lua main.lua --mode get-target-packages
+lua main.lua --mode get-cache-packages
+lua main.lua --lang en
+lua main.lua --autorun
+```
+
+Keterangan singkat:
+- `--mode setup` = buka wizard setup cepat.
+- `--mode edit` = langsung ke menu edit config.
+- `--mode monitor` = langsung start monitoring.
+- `--mode get-target-packages` = output package target monitor.
+- `--mode get-cache-packages` = output package target clear cache.
+- `--lang id|en` = override bahasa.
+- `--autorun` = mode auto-run (dipakai script boot).
 
 ---
 
@@ -336,7 +369,6 @@ Baseline pemula (silakan sesuaikan):
 1. Di menu utama → `Misc` → `Setup auto jalan setelah reboot`
 2. Script akan membuat:
    - `/data/data/com.termux/files/home/.termux/boot/roblox-monitor.sh`
-   - `/data/adb/service.d/roblox-monitor.sh` (fallback root, jika Magisk aktif)
 3. Reboot device
 4. Monitor otomatis jalan
 
@@ -346,22 +378,12 @@ Baseline pemula (silakan sesuaikan):
 tail -n 120 ~/.termux/boot/roblox-monitor.log
 ```
 
-**Log Fallback Root (Magisk service.d):**
-```sh
-tail -n 120 /data/local/tmp/roblox-monitor-boot.log
-```
-
-**Cek apakah Magisk aktif:**
-```sh
-test -d /data/adb && echo "Magisk aktif" || echo "Magisk tidak aktif"
-```
-
 ### Jika Boot Tidak Jalan
 1. Pastikan Termux:Boot sudah install (dari Google Play / Aptoide)
 2. Buka app Termux:Boot sekali (untuk register daemon)
 3. Jalankan setup boot lagi
-4. Jika pakai Magisk, cek `/data/adb/service.d/` readable & executable
-5. Cek log di kedua path di atas
+4. Pastikan file `~/.termux/boot/roblox-monitor.sh` executable
+5. Cek log di path di atas
 
 ---
 

@@ -5,7 +5,7 @@ Roblox monitor script for Termux (rooted Android) to:
 - **Detect disconnect/error** patterns from logcat with full coverage (code 273, 277, etc).
 - **Manage multiple Roblox packages** (official + clones) with safe handling.
 - **Apply auto float/grid** window behavior on A12+ and A10.
-- **Auto-run on reboot** with Magisk service.d fallback (no required Termux:Boot first-open).
+- **Auto-run on reboot** via Termux:Boot.
 
 Main runtime is in `main.lua`.
 `start.sh` is used as bootstrap/update + dependency installer, then it runs `main.lua`.
@@ -25,9 +25,9 @@ Main runtime is in `main.lua`.
 - Cache clearing consistent between startup and error handler
 
 **Boot Autorun Improvements:**
-- Setup boot via Termux:Boot + Magisk service.d fallback
-- Root-level service works without forced Termux:Boot first-open
-- Log to `/data/local/tmp/roblox-monitor-boot.log` for debugging
+- Setup boot via Termux:Boot (`~/.termux/boot/roblox-monitor.sh`)
+- Autorun log written to `~/.termux/boot/roblox-monitor.log`
+- Setup is available directly from `Misc` menu
 
 **Safety Improvements:**
 - Prevent double-execute with `crashed[pkg]` state flag
@@ -108,6 +108,39 @@ Main menu options:
 - `2. Edit config` = adjust detailed settings anytime.
 - `3. Optimize + Launch Apps` = start monitor.
 - `4. Misc` = reboot auto-run + repo update.
+
+### 4.5) Hotkeys While Monitoring (NEW)
+
+When monitor is running, you can use these hotkeys:
+- `q` = quit script fully.
+- `s` or `Ctrl+Z` = stop monitor and return to main menu.
+- `p` = pause/resume auto-rejoin (monitor display keeps running).
+
+Note:
+- Pause mode only disables auto-rejoin; monitor output still updates.
+
+### 4.6) CLI Modes (NEW)
+
+`main.lua` supports non-interactive modes:
+
+```sh
+lua main.lua --mode setup
+lua main.lua --mode edit
+lua main.lua --mode monitor
+lua main.lua --mode get-target-packages
+lua main.lua --mode get-cache-packages
+lua main.lua --lang en
+lua main.lua --autorun
+```
+
+Quick meaning:
+- `--mode setup` = open quick setup wizard.
+- `--mode edit` = open edit config menu directly.
+- `--mode monitor` = start monitoring directly.
+- `--mode get-target-packages` = print monitor target packages.
+- `--mode get-cache-packages` = print cache-clear target packages.
+- `--lang id|en` = override language.
+- `--autorun` = autorun mode (used by boot script).
 
 ---
 
@@ -336,7 +369,6 @@ Beginner-friendly baseline (adjust as needed):
 1. Main menu → `Misc` → `Setup auto exec after reboot`
 2. Script creates:
    - `/data/data/com.termux/files/home/.termux/boot/roblox-monitor.sh`
-   - `/data/adb/service.d/roblox-monitor.sh` (root fallback, if Magisk active)
 3. Reboot device
 4. Monitor runs automatically
 
@@ -346,22 +378,12 @@ Beginner-friendly baseline (adjust as needed):
 tail -n 120 ~/.termux/boot/roblox-monitor.log
 ```
 
-**Root fallback log (Magisk service.d):**
-```sh
-tail -n 120 /data/local/tmp/roblox-monitor-boot.log
-```
-
-**Check if Magisk is active:**
-```sh
-test -d /data/adb && echo "Magisk active" || echo "Magisk not active"
-```
-
 ### If Boot Doesn't Run
 1. Ensure Termux:Boot is installed (Google Play / Aptoide)
 2. Open Termux:Boot app once (to register daemon)
 3. Run setup boot again
-4. If using Magisk, check `/data/adb/service.d/` is readable & executable
-5. Check logs at both paths above
+4. Ensure `~/.termux/boot/roblox-monitor.sh` is executable
+5. Check the log path above
 
 ---
 
