@@ -41,7 +41,7 @@ local COLOR = {
 }
 
 local DEVICE_PROFILE = { checked = false }
-local RUNTIME_STATE = { monitor_compact = false, monitor_ui_mode = "safe", monitor_hotkeys_enabled = false }
+local RUNTIME_STATE = { monitor_compact = false, monitor_ui_mode = "safe", monitor_hotkeys_enabled = false, monitor_paused = false }
 
 local function shell_quote(value)
   value = tostring(value or "")
@@ -227,6 +227,9 @@ local function poll_monitor_control_key()
   end
   if lower == "s" or key == string.char(26) then
     return "stop"
+  end
+  if lower == "p" then
+    return "pause"
   end
   return nil
 end
@@ -1900,7 +1903,8 @@ local function render_monitor_snapshot(packages_info, memory_info, check_count)
   -- Brand header
   push(htop())
   push(row_full("X  N  N  N  S  E  T  S"))
-  push(row_full("v" .. VERSION))
+  local version_text = (RUNTIME_STATE.monitor_paused) and ("v" .. VERSION .. " [PAUSED]") or ("v" .. VERSION)
+  push(row_full(version_text))
 
   -- Column headers
   push(hline("\xe2\x95\xa0", "\xe2\x95\xa6", "\xe2\x95\xa3"))
@@ -1946,8 +1950,9 @@ local function render_monitor_safe_line(packages_info, memory_info, loop_count)
     parts[#parts + 1] = short_pkg .. "(" .. user_str .. ")" .. mark
   end
   local pkg_summary = table.concat(parts, " ")
-  local status = string.format("[%s] %d/%d ONLINE RAM:%dMB(%d%%) | %s",
-    os.date("%H:%M"), running_count, #packages_info, free, pct, pkg_summary)
+  local pause_indicator = (RUNTIME_STATE.monitor_paused) and " [PAUSED]" or ""
+  local status = string.format("[%s]%s %d/%d ONLINE RAM:%dMB(%d%%) | %s",
+    os.date("%H:%M"), pause_indicator, running_count, #packages_info, free, pct, pkg_summary)
   return short_text(status, math.max(40, term_cols()))
 end
 
@@ -1999,13 +2004,19 @@ local function run_monitor(config, lang)
         "[*] Hotkey s/Ctrl+Z terdeteksi, stop monitor dan kembali ke menu.",
         "[*] Hotkey s/Ctrl+Z detected, stopping monitor and returning to menu."))
       return "menu"
+    elseif command == "pause" then
+      RUNTIME_STATE.monitor_paused = not RUNTIME_STATE.monitor_paused
+      local msg = (RUNTIME_STATE.monitor_paused) and
+        tr(lang, "[*] Monitor PAUSED - auto-rejoin dinonaktifkan", "[*] Monitor PAUSED - auto-rejoin disabled") or
+        tr(lang, "[*] Monitor RESUMED - auto-rejoin aktif", "[*] Monitor RESUMED - auto-rejoin active")
+      runtime_log(msg, true)
     end
     return nil
   end
 
   runtime_log(tr(lang,
-    "[HOTKEY] q=keluar script | s=stop monitor ke menu | Ctrl+Z=stop monitor",
-    "[HOTKEY] q=quit script | s=stop monitor to menu | Ctrl+Z=stop monitor"), true)
+    "[HOTKEY] q=keluar script | s=stop monitor ke menu | p=pause/resume | Ctrl+Z=stop monitor",
+    "[HOTKEY] q=quit script | s=stop monitor to menu | p=pause/resume | Ctrl+Z=stop monitor"), true)
 
   local installed = select(1, scan_packages())
   local targets = resolve_target_packages(config)
@@ -2134,8 +2145,12 @@ local function run_monitor(config, lang)
     for i, pkg in ipairs(crashed_pkgs) do
       crashed[pkg] = true
       runtime_log(string.format("[%s] %s Crash/Mati", os.date("%H:%M:%S"), pkg), true)
-      kill_roblox(pkg)
-      join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total, config)
+      if not RUNTIME_STATE.monitor_paused then
+        kill_roblox(pkg)
+        join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total, config)
+      else
+        runtime_log("[*] Monitor paused - skip auto-rejoin untuk " .. pkg, false)
+      end
       pkg_state[pkg] = {join_time = os.time(), last_activity = os.time()}
       local _ud1 = math.max(0, tonumber(config.username_fetch_delay_seconds) or 5)
       if _ud1 > 0 then
@@ -2170,8 +2185,12 @@ local function run_monitor(config, lang)
           local pkg, _, running = info[1], info[2], info[3]
           if running and not crashed[pkg] then
             runtime_log(string.format("[%s] Error: %s [%s]", os.date("%H:%M:%S"), reason or "unknown", pkg), true)
-            kill_roblox(pkg)
-            join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total, config)
+            if not RUNTIME_STATE.monitor_paused then
+              kill_roblox(pkg)
+              join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total, config)
+            else
+              runtime_log("[*] Monitor paused - skip auto-rejoin untuk " .. pkg, false)
+            end
             pkg_state[pkg] = {join_time = os.time(), last_activity = os.time()}
             local _ud2 = math.max(0, tonumber(config.username_fetch_delay_seconds) or 5)
             if _ud2 > 0 then
