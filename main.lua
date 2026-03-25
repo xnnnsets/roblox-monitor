@@ -2183,11 +2183,15 @@ local function run_monitor(config, lang)
       else
         for _, info in ipairs(packages_info) do
           local pkg, _, running = info[1], info[2], info[3]
-          if running and not crashed[pkg] then
+          -- Rejoin if: running but not crashed OR paused handler belum trigger (untuk safety)
+          -- Changed from "running and not crashed" to include offline apps from disconnect
+          local should_rejoin = (running or not crashed[pkg])
+          if should_rejoin and not crashed[pkg] then
             runtime_log(string.format("[%s] Error: %s [%s]", os.date("%H:%M:%S"), reason or "unknown", pkg), true)
             if not RUNTIME_STATE.monitor_paused then
               kill_roblox(pkg)
               join_server(pkg, activity_map[pkg], grid_index_map[pkg], grid_total, config)
+              crashed[pkg] = true  -- Mark as crashed to prevent double rejoin
             else
               runtime_log("[*] Monitor paused - skip auto-rejoin untuk " .. pkg, false)
             end
