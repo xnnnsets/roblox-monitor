@@ -1804,7 +1804,9 @@ end
 
 local function read_recent_roblox_logs(config)
   local lines = math.max(200, math.min(tonumber(config.log_scan_lines or 800) or 800, 1500))
-  local _, output = run_su("logcat -d -t " .. tostring(lines) .. " 2>/dev/null | grep -Ei 'Roblox  :|rbx\\.|com\\.roblox\\.client' | tail -250")
+  -- Capture ALL relevant Roblox logs (not just filtered by tag/package names)
+  -- This ensures we catch disconnect patterns in various formats
+  local _, output = run_su("logcat -d -t " .. tostring(lines) .. " 2>/dev/null | grep -Ei '(Roblox|FLog::Network|Disconnection|Session Transition|AckTimeout)' | tail -300")
   return output
 end
 
@@ -1813,22 +1815,40 @@ local function check_game_status(config)
   if trim(logs) == "" then
     return false, nil, false
   end
-  -- Disconnect code 276 = kicked dari server, tidak rejoin ulang
-  if logs:match("Sending disconnect with reason:%s*276") then
-    return true, "Disconnect kode 276 (kicked dari server)", true
+  
+  -- Code 276 = kicked from server, NO auto-rejoin
+  if logs:match("Sending disconnect with reason:%s*276") or logs:match("Disconnection Notification%.%s*Reason:%s*276") then
+    return true, "Disconnect code 276 (kicked dari server)", true
   end
+  
+  -- Comprehensive disconnect patterns (cover all variations)
   local patterns = {
-    {"Sending disconnect with reason:%s*277", "Disconnect reason 277"},
-    {"Sending disconnect with reason:%s*26%d", "AFK disconnect"},
-    {"Sending disconnect with reason:%s*279", "Disconnect reason 279"},
-    {"Sending disconnect with reason:%s*27%d"},
+    -- Sending disconnect format (standard)
+    {"Sending disconnect with reason:%s*273", "Disconnect code 273 (game joined elsewhere)"},
+    {"Sending disconnect with reason:%s*277", "Disconnect code 277 (server maintenance)"},
+    {"Sending disconnect with reason:%s*26%d", "Disconnect code 26x (AFK timeout)"},
+    {"Sending disconnect with reason:%s*27[0-9]", "Disconnect code 27x (server error)"},
+    {"Sending disconnect with reason:%s*[0-9]+", "Disconnect (generic reason code)"},
+    
+    -- Disconnection Notification format (alternative)
+    {"Disconnection Notification%.%s*Reason:%s*273", "Disconnect code 273 (game joined elsewhere)"},
+    {"Disconnection Notification%.%s*Reason:%s*277", "Disconnect code 277 (server maintenance)"},
+    {"Disconnection Notification%.%s*Reason:%s*27[0-9]", "Disconnect code 27x (server error)"},
+    {"Disconnection Notification%.%s*Reason:%s*[0-9]+", "Disconnect notification (reason code)"},
+    
+    -- Connection lost patterns
     {"Lost connection with reason%s*:%s*Lost connection to the game server", "Lost connection to game server"},
-    {"%[FLog::Network%]%s+Connection lost", "Connection lost"},
+    {"Lost connection with reason%s*:%", "Lost connection (with reason)"},
+    {"\\[FLog::Network\\]%s+Connection lost", "Connection lost (FLog)"},
+    {"ID_DISCONNECTION_NOTIFICATION", "ID_DISCONNECTION_NOTIFICATION"},
     {"ID_CONNECTION_LOST", "ID_CONNECTION_LOST"},
-    {"AckTimeout", "AckTimeout"},
-    {"SignalRCoreError.*Disconnected", "SignalR disconnected"},
+    
+    -- Timeout/error patterns
+    {"AckTimeout", "Timeout (AckTimeout)"},
     {"Session Transition FSM:%s*Error Occurred", "Session transition error"},
+    {"SignalRCoreError.*Disconnected", "SignalR disconnected"},
   }
+  
   for _, item in ipairs(patterns) do
     if logs:match(item[1]) then
       return true, item[2], false
@@ -2134,10 +2154,10 @@ local function run_monitor(config, lang)
         end
       end
     end
+    -- Always check game status every cycle (more responsive to disconnects)
+    -- Original: only check every N cycles, could miss disconnect events
     local is_error, reason, skip_rejoin = false, nil, false
-    if (loop_count % log_check_every_cycles) == 0 then
-      is_error, reason, skip_rejoin = check_game_status(config)
-    end
+    is_error, reason, skip_rejoin = check_game_status(config)
     if is_error then
       if skip_rejoin then
         runtime_log(string.format("[%s] [!] %s - tidak rejoin otomatis.", os.date("%H:%M:%S"), reason or "skip"), true)
